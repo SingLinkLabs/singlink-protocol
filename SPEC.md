@@ -1,18 +1,18 @@
-# SingLink 3.0 Protocol Specification (SL3/1)
+# SingLink Protocol Specification (SingLink/1)
 
 Status: **Draft 1 — not yet independently audited.** Wire version byte: `0x01`.
-Reference implementation: `core/sl3` (Go, standard library only).
+Reference implementation: `core/singlink` (Go, standard library only).
 
 The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
 ## 1. Goals
 
-SL3 is a single-request stream proxy protocol in the family of VLESS and
+SingLink is a single-request stream proxy protocol in the family of VLESS and
 Trojan: the client opens a connection, sends one request naming a
-destination, and the server relays bytes. SL3 keeps that simplicity
+destination, and the server relays bytes. SingLink keeps that simplicity
 (no extra round trip, the first payload rides with the request) and adds:
 
-| Property | VLESS | SL3 |
+| Property | VLESS | SingLink |
 |---|---|---|
 | Who may connect | anyone holding the shared UUID | holder of an issuer-signed **permission token** *and* the device key it is bound to |
 | Per-user policy at the node | none in protocol (panel-side) | expiry, capabilities (TCP/UDP), rate limit, concurrent-connection limit, revocation — enforced by every node from the token alone |
@@ -23,7 +23,7 @@ destination, and the server relays bytes. SL3 keeps that simplicity
 | Replay | n/a | timestamp window + ephemeral-key cache |
 | Length obfuscation | Vision flow (optional) | random header padding and per-frame padding |
 
-Non-goals for SL3/1: multiplexing several streams in one connection
+Non-goals for SingLink/1: multiplexing several streams in one connection
 (use a mux layer above), and making the raw-TCP transport indistinguishable
 from random bytes (use the TLS transport for censorship resistance).
 
@@ -40,8 +40,8 @@ without padding.
 
 - Node public key: `X25519 public (32) || ML-KEM-768 encapsulation key (1184)` = 1216 bytes.
 - Node private key: `X25519 scalar (32) || ML-KEM-768 seed d||z (64)` = 96 bytes.
-- `server_id = SHA-256("SingLink3/1" || node public key)`.
-- Issuer key id: first 4 bytes (big-endian uint32) of `SHA-256("SingLink3/1 issuer " || issuer public key)`.
+- `server_id = SHA-256("SingLink/1" || node public key)`.
+- Issuer key id: first 4 bytes (big-endian uint32) of `SHA-256("SingLink/1 issuer " || issuer public key)`.
 
 ## 3. Permission token
 
@@ -60,7 +60,7 @@ without padding.
 | 89 | 4 | rate limit, kbit/s, per subject per node; `0` = unlimited |
 | 93 | 2 | max concurrent connections per subject per node; `0` = unlimited |
 | 95 | 1 | plan id (opaque to nodes) |
-| 96 | 64 | Ed25519 signature over `"SL3 token v1\x00" || bytes[0:96]` |
+| 96 | 64 | Ed25519 signature over `"SingLink token v1\x00" || bytes[0:96]` |
 
 Nodes hold a set of trusted issuer public keys (several, to allow rotation)
 and look the issuer up by key id. Tokens are bearer credentials only together
@@ -73,14 +73,14 @@ stay small.
 
 ## 4. Transport
 
-SL3 runs over any reliable, ordered byte stream.
+SingLink runs over any reliable, ordered byte stream.
 
 - `tls` (default): TCP + TLS 1.3. The node SHOULD present a certificate that a
   browser would accept for its domain and SHOULD put a real website behind
   the fallback (§7). ALPN offered by the client: `h2`, `http/1.1`; the node
   selects `http/1.1`. Clients MAY pin the certificate (SHA-256 of the leaf
   DER) instead of using the Web PKI.
-- `tcp`: SL3 directly on TCP. For testing or for use inside another tunnel.
+- `tcp`: SingLink directly on TCP. For testing or for use inside another tunnel.
 
 Future transports (WebSocket, HTTP/2, QUIC) carry the same byte stream; the
 inner encryption makes them safe to route through CDNs.
@@ -104,8 +104,8 @@ Key schedule (HKDF-SHA-256, AEAD = AES-256-GCM):
 ```
 ss_x  = X25519(e, S_x)
 ss_pq = ML-KEM-768.Encaps(S_kem) -> (ss_pq, CT)
-salt  = SHA-256("SingLink3/1" || "salt" || server_id || E || CT)
-ek    = HKDF(ikm = ss_x || ss_pq, salt = salt, info = "sl3 early", L = 32)
+salt  = SHA-256("SingLink/1" || "salt" || server_id || E || CT)
+ek    = HKDF(ikm = ss_x || ss_pq, salt = salt, info = "singlink early", L = 32)
 ```
 
 `E` on the wire: the client MUST set bit 255 (the top bit of byte 31) to a
@@ -122,7 +122,7 @@ cmd        1   0x01 TCP, 0x02 UDP
 addr       var ATYP(1): 0x01 IPv4(4) | 0x03 domain len(1)+name | 0x04 IPv6(16); then port(2)
 tok_len    2
 token      tok_len
-pop_sig    64  Ed25519(device_key, SHA-256("SL3 pop" || salt || ver..token))
+pop_sig    64  Ed25519(device_key, SHA-256("SingLink pop" || salt || ver..token))
 early_len  2   <= 8192
 early      early_len   first application bytes (TCP only)
 pad_len    2
@@ -136,7 +136,7 @@ domain `udp`, port 0).
 
 The node MUST perform these checks. Every failure in this list is
 **silent**: the connection is handed to the fallback (§7) with all bytes
-read so far, and no SL3 byte is ever sent.
+read so far, and no SingLink byte is ever sent.
 
 1. First 4 bytes match a plaintext prefix → fallback immediately.
 2. `E` and `CT` decode; X25519 result is not all-zero.
@@ -157,9 +157,9 @@ frames...             sealed with s2c (§6); the first frame is STATUS
 
 ```
 ee    = X25519(f, E)
-tsalt = SHA-256("SingLink3/1" || "traffic" || salt || F || SHA-256(LEN || HDR))
-c2s   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "sl3 c2s", L = 32)
-s2c   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "sl3 s2c", L = 32)
+tsalt = SHA-256("SingLink/1" || "traffic" || salt || F || SHA-256(LEN || HDR))
+c2s   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "singlink c2s", L = 32)
+s2c   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "singlink s2c", L = 32)
 ```
 
 Policy checks, answered with a STATUS frame and then close:
@@ -245,7 +245,7 @@ destinations.
 ## 9. Client link
 
 ```
-sl3://<token>.<device-seed>@host:port?pk=<node-public-key>&tr=tls&sni=<name>&pin=<sha256>#<name>
+singlink://<token>.<device-seed>@host:port?pk=<node-public-key>&tr=tls&sni=<name>&pin=<sha256>#<name>
 ```
 
 The link contains the device secret and MUST be handled like a password.
