@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/singlinklabs/singlink-protocol/singlink"
+	"github.com/SingLinkLabs/singlink-protocol/singlink"
 )
 
 func TestSOCKS5ConnectAndUDP(t *testing.T) {
@@ -105,4 +105,88 @@ func TestSOCKS5ConnectAndUDP(t *testing.T) {
 		t.Fatalf("udp reply %q %v", buf[:n], err)
 	}
 	_ = context.Background
+}
+
+func newTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	key, _ := singlink.GenerateServerKey()
+	issuer, _ := singlink.GenerateEd25519()
+	device, _ := singlink.GenerateEd25519()
+	srv, _ := singlink.NewServer(singlink.ServerConfig{Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)), AllowPrivate: true})
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	t.Cleanup(func() { ln.Close() })
+	go srv.Serve(ln)
+	tok, _ := singlink.IssueToken(issuer, &singlink.Token{DevicePub: device.Public().(ed25519.PublicKey), Caps: singlink.CapTCP | singlink.CapUDP,
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)})
+	c := singlink.NewClient(&singlink.Profile{Server: ln.Addr().String(), Transport: "tcp", ServerKey: key.Public(), Token: tok, Device: device})
+	s := &Server{Client: c}
+	addr, err := s.Start("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, addr.String()
+}
+
+// I-11: Close must not hang while a CONNECT is open.
+func TestCloseWithOpenConnect(t *testing.T) {
+	s, addr := newTestServer(t)
+	hold, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer hold.Close()
+	go func() {
+		for {
+			c, err := hold.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // silent target
+		}
+	}()
+	conn, _ := net.Dial("tcp", addr)
+	defer conn.Close()
+	conn.Write([]byte{5, 1, 0})
+	buf := make([]byte, 16)
+	io.ReadFull(conn, buf[:2])
+	ha := hold.Addr().(*net.TCPAddr)
+	conn.Write(append(append([]byte{5, 1, 0, 1}, ha.IP.To4()...), byte(ha.Port>>8), byte(ha.Port)))
+	io.ReadFull(conn, buf[:10])
+	conn.Write([]byte("data"))
+	time.Sleep(300 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close hung with an open CONNECT")
+	}
+}
+
+// I-10: optional username/password.
+func TestAuth(t *testing.T) {
+	s, addr := newTestServer(t)
+	defer s.Close()
+	s.Username, s.Password = "u", "p"
+	try := func(methods []byte, user, pass string) bool {
+		c, _ := net.Dial("tcp", addr)
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(3 * time.Second))
+		c.Write(append([]byte{5, byte(len(methods))}, methods...))
+		r := make([]byte, 2)
+		if _, err := io.ReadFull(c, r); err != nil || r[1] != 2 {
+			return false
+		}
+		c.Write(append(append(append([]byte{1, byte(len(user))}, user...), byte(len(pass))), pass...))
+		if _, err := io.ReadFull(c, r); err != nil {
+			return false
+		}
+		return r[1] == 0
+	}
+	if try([]byte{0}, "", "") {
+		t.Fatal("no-auth accepted")
+	}
+	if try([]byte{2}, "u", "wrong") {
+		t.Fatal("wrong password accepted")
+	}
+	if !try([]byte{0, 2}, "u", "p") {
+		t.Fatal("correct password refused")
+	}
 }

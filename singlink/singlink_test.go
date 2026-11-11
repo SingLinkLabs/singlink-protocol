@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -15,8 +14,6 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -104,8 +101,11 @@ func selfSigned(t *testing.T) (tls.Certificate, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(der)
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}, sum[:]
+	pin, err := PinFromCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}, pin
 }
 
 // echoServer echoes everything; if greeting is set it is sent first.
@@ -317,11 +317,14 @@ func TestPermissions(t *testing.T) {
 	echo := echoServer(t, "")
 	now := time.Now()
 
+	// Recently expired: the user is told; long expired or not yet valid:
+	// the node does not reveal itself.
 	e := newEnv(t, envOpt{tok: &Token{Caps: CapTCP, NotBefore: now.Add(-2 * time.Hour), NotAfter: now.Add(-time.Hour)}})
 	expectStatus(t, dial(t, e, echo), StatusTokenExpired)
-
+	e = newEnv(t, envOpt{tok: &Token{Caps: CapTCP, NotBefore: now.Add(-72 * time.Hour), NotAfter: now.Add(-48 * time.Hour)}})
+	expectRejected(t, dial(t, e, echo))
 	e = newEnv(t, envOpt{tok: &Token{Caps: CapTCP, NotBefore: now.Add(time.Hour), NotAfter: now.Add(2 * time.Hour)}})
-	expectStatus(t, dial(t, e, echo), StatusNotYetValid)
+	expectRejected(t, dial(t, e, echo))
 
 	e = newEnv(t, envOpt{tok: &Token{Caps: CapUDP, NotBefore: now, NotAfter: now.Add(time.Hour)}})
 	expectStatus(t, dial(t, e, echo), StatusCapDenied)
@@ -336,7 +339,8 @@ func TestPermissions(t *testing.T) {
 	// Default node policy refuses loopback destinations and port 25.
 	e = newEnv(t, envOpt{mutate: func(c *ServerConfig) { c.AllowPrivate = false }})
 	expectStatus(t, dial(t, e, echo), StatusForbiddenDest)
-	expectStatus(t, dial(t, e, "localhost:80"), StatusForbiddenDest)
+	// A name that resolves only to forbidden addresses looks unresolvable.
+	expectStatus(t, dial(t, e, "localhost:80"), StatusDialFailed)
 	e = newEnv(t, envOpt{})
 	expectStatus(t, dial(t, e, "127.0.0.1:25"), StatusForbiddenDest)
 
@@ -348,15 +352,6 @@ func TestPermissions(t *testing.T) {
 	c1.Close()
 	time.Sleep(200 * time.Millisecond)
 	roundTrip(t, dial(t, e, echo), []byte("b"))
-}
-
-func TestRevocation(t *testing.T) {
-	dir := t.TempDir()
-	rf := filepath.Join(dir, "revoked.txt")
-	tok := &Token{ID: [16]byte{0xaa, 0xbb}, Caps: CapTCP, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
-	os.WriteFile(rf, []byte("# revoked\naabb0000000000000000000000000000\n"), 0o600)
-	e := newEnv(t, envOpt{tok: tok, mutate: func(c *ServerConfig) { c.RevokedFile = rf }})
-	expectStatus(t, dial(t, e, echoServer(t, "")), StatusTokenRevoked)
 }
 
 func TestRateLimit(t *testing.T) {
@@ -534,7 +529,7 @@ func BenchmarkHandshake(b *testing.B) {
 	req := &request{ts: time.Now(), cmd: CmdTCP, dst: Addr{Host: "example.com", Port: 443}, token: make([]byte, TokenLen)}
 	for i := 0; i < b.N; i++ {
 		flight, _, _ := buildFirstFlight(key.Public(), dev, req, 0)
-		if _, err := readFirstFlight(bytes.NewReader(flight), key); err != nil {
+		if _, err := parseFirstFlight(flight, []*ServerPrivateKey{key}); err != nil {
 			b.Fatal(err)
 		}
 	}

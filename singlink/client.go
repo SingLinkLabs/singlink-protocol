@@ -6,11 +6,13 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,7 +22,7 @@ type Profile struct {
 	Server    string // host:port
 	Transport string // "tls" (default) or "tcp"
 	SNI       string
-	Pin       []byte // optional SHA-256 of the server certificate (DER)
+	Pin       []byte // optional SHA-256 of the server certificate's SubjectPublicKeyInfo
 	Insecure  bool   // skip certificate verification (testing only)
 	ServerKey *ServerPublicKey
 	Token     []byte
@@ -61,9 +63,10 @@ func (p *Profile) Link() string {
 
 // ParseLink decodes an singlink:// link.
 func ParseLink(s string) (*Profile, error) {
+	// Errors never echo the link: it contains the device secret.
 	u, err := url.Parse(strings.TrimSpace(s))
 	if err != nil {
-		return nil, err
+		return nil, errors.New("singlink: malformed link")
 	}
 	if u.Scheme != "singlink" {
 		return nil, errors.New("singlink: link must start with singlink://")
@@ -77,20 +80,20 @@ func ParseLink(s string) (*Profile, error) {
 	}
 	p := &Profile{Name: u.Fragment, Server: u.Host}
 	if _, _, err := net.SplitHostPort(p.Server); err != nil {
-		return nil, fmt.Errorf("singlink: bad server address: %w", err)
+		return nil, errors.New("singlink: bad server address in link")
 	}
 	if p.Token, err = B64.DecodeString(tokB64); err != nil {
 		return nil, errors.New("singlink: bad token encoding")
 	}
 	if _, err := ParseToken(p.Token); err != nil {
-		return nil, err
+		return nil, errors.New("singlink: malformed token in link")
 	}
 	seed, err := B64.DecodeString(devB64)
 	if err != nil {
 		return nil, errors.New("singlink: bad device key encoding")
 	}
 	if p.Device, err = Ed25519FromSeed(seed); err != nil {
-		return nil, err
+		return nil, errors.New("singlink: bad device key in link")
 	}
 	q := u.Query()
 	pk, err := B64.DecodeString(q.Get("pk"))
@@ -98,7 +101,7 @@ func ParseLink(s string) (*Profile, error) {
 		return nil, errors.New("singlink: bad server key encoding")
 	}
 	if p.ServerKey, err = ParseServerPublicKey(pk); err != nil {
-		return nil, err
+		return nil, errors.New("singlink: bad server key in link")
 	}
 	p.Transport = q.Get("tr")
 	if p.Transport == "" {
@@ -117,6 +120,29 @@ func ParseLink(s string) (*Profile, error) {
 	return p, nil
 }
 
+// PinFromCertificate returns the pin for a DER certificate: SHA-256 of its
+// SubjectPublicKeyInfo, so it survives renewals that keep the same key.
+func PinFromCertificate(der []byte) ([]byte, error) {
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(c.RawSubjectPublicKeyInfo)
+	return sum[:], nil
+}
+
+// Warnings lists risky settings in the profile.
+func (p *Profile) Warnings() []string {
+	var w []string
+	if p.Transport == "tcp" {
+		w = append(w, "raw TCP transport: traffic is not disguised as HTTPS")
+	}
+	if p.Insecure && len(p.Pin) == 0 {
+		w = append(w, "TLS certificate is not verified: the connection is still encrypted end to end, but it can be detected and cut")
+	}
+	return w
+}
+
 // TokenInfo parses the profile's token (without verifying it).
 func (p *Profile) TokenInfo() (*Token, error) { return ParseToken(p.Token) }
 
@@ -128,6 +154,14 @@ type Client struct {
 	HeaderPadMax int // random padding added to the request header
 	PadFrames    int // number of leading frames that get random padding
 	PadMax       int // max padding per padded frame
+
+	lastErr atomic.Value // string: last handshake error of any connection
+}
+
+// LastError returns the most recent handshake error ("" if none).
+func (c *Client) LastError() string {
+	s, _ := c.lastErr.Load().(string)
+	return s
 }
 
 // NewClient returns a client with default padding settings.
@@ -160,6 +194,8 @@ func (c *Client) dialTransport(ctx context.Context) (net.Conn, error) {
 		ServerName: sni,
 		MinVersion: tls.VersionTLS13,
 		NextProtos: []string{"h2", "http/1.1"},
+		// The first flight must travel in a single TLS record (SPEC §4).
+		DynamicRecordSizingDisabled: true,
 	}
 	if len(c.p.Pin) > 0 {
 		pin := c.p.Pin
@@ -168,7 +204,7 @@ func (c *Client) dialTransport(ctx context.Context) (net.Conn, error) {
 			if len(cs.PeerCertificates) == 0 {
 				return errors.New("singlink: no server certificate")
 			}
-			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			sum := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
 			if !bytes.Equal(sum[:], pin) {
 				return errors.New("singlink: server certificate does not match pin")
 			}

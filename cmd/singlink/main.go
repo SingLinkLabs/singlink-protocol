@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -18,14 +17,15 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/singlinklabs/singlink-protocol/engine"
-	"github.com/singlinklabs/singlink-protocol/singlink"
+	"github.com/SingLinkLabs/singlink-protocol/engine"
+	"github.com/SingLinkLabs/singlink-protocol/singlink"
 )
 
 const usage = `singlink — SingLink Protocol protocol tool (` + singlink.Version + `)
@@ -150,7 +150,7 @@ func token(args []string) error {
 		issuerSeed := fs.String("issuer", "", "issuer seed (base64url)")
 		devicePub := fs.String("device", "", "device public key (base64url)")
 		subject := fs.String("subject", "", "subject id, 32 hex chars (random if empty)")
-		days := fs.Float64("days", 30, "validity in days")
+		days := fs.Float64("days", 1, "validity in days (keep short; the app renews tokens)")
 		caps := fs.String("caps", "tcp,udp", "capabilities")
 		rate := fs.Uint("rate", 0, "rate limit in kbit/s (0 = unlimited)")
 		maxConns := fs.Uint("max-conns", 0, "max concurrent connections (0 = unlimited)")
@@ -257,21 +257,34 @@ func link(args []string) error {
 }
 
 type serverFile struct {
-	Listen       string   `json:"listen"`
-	PrivateKey   string   `json:"private_key"`
-	Issuers      []string `json:"issuers"`
-	TLSCert      string   `json:"tls_cert"`
-	TLSKey       string   `json:"tls_key"`
-	Fallback     string   `json:"fallback"`
-	AllowPrivate bool     `json:"allow_private"`
-	BlockedPorts []uint16 `json:"blocked_ports"`
-	RevokedFile  string   `json:"revoked_file"`
-	LogLevel     string   `json:"log_level"`
+	Listen                string   `json:"listen"`
+	PrivateKey            string   `json:"private_key"`
+	OldPrivateKeys        []string `json:"old_private_keys"`
+	Issuers               []string `json:"issuers"`
+	TLSCert               string   `json:"tls_cert"`
+	TLSKey                string   `json:"tls_key"`
+	Fallback              string   `json:"fallback"`
+	FallbackProxyProtocol bool     `json:"fallback_proxy_protocol"`
+	AllowPrivate          bool     `json:"allow_private"`
+	DenyCIDRs             []string `json:"deny_cidrs"`
+	BlockedPorts          []uint16 `json:"blocked_ports"`
+	AllowSMTP             bool     `json:"allow_smtp"`
+	MaxConnections        int      `json:"max_connections"`
+	RevokedFile           string   `json:"revoked_file"`
+	LogLevel              string   `json:"log_level"`
+}
+
+func parseServerKey(s string) (*singlink.ServerPrivateKey, error) {
+	kb, err := singlink.B64.DecodeString(s)
+	if err != nil {
+		return nil, errors.New("bad private key encoding")
+	}
+	return singlink.ParseServerPrivateKey(kb)
 }
 
 func server(args []string) error {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	path := fs.String("c", "server.json", "config file")
+	path := fs.String("c", "server.json", "config file (systemd: $CREDENTIALS_DIRECTORY/server.json)")
 	fs.Parse(args)
 	b, err := os.ReadFile(*path)
 	if err != nil {
@@ -281,13 +294,25 @@ func server(args []string) error {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return err
 	}
-	kb, err := singlink.B64.DecodeString(f.PrivateKey)
+	key, err := parseServerKey(f.PrivateKey)
 	if err != nil {
-		return errors.New("bad private_key")
+		return fmt.Errorf("private_key: %w", err)
 	}
-	key, err := singlink.ParseServerPrivateKey(kb)
-	if err != nil {
-		return err
+	var old []*singlink.ServerPrivateKey
+	for i, k := range f.OldPrivateKeys {
+		ok, err := parseServerKey(k)
+		if err != nil {
+			return fmt.Errorf("old_private_keys[%d]: %w", i, err)
+		}
+		old = append(old, ok)
+	}
+	var deny []netip.Prefix
+	for _, c := range f.DenyCIDRs {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			return fmt.Errorf("deny_cidrs: %w", err)
+		}
+		deny = append(deny, p)
 	}
 	var pubs []ed25519.PublicKey
 	for _, s := range f.Issuers {
@@ -302,8 +327,10 @@ func server(args []string) error {
 		lvl = slog.LevelDebug
 	}
 	cfg := singlink.ServerConfig{
-		Key: key, Issuers: singlink.NewIssuers(pubs...), Fallback: f.Fallback,
-		AllowPrivate: f.AllowPrivate, BlockedPorts: f.BlockedPorts, RevokedFile: f.RevokedFile,
+		Key: key, OldKeys: old, Issuers: singlink.NewIssuers(pubs...),
+		Fallback: f.Fallback, FallbackProxyProtocol: f.FallbackProxyProtocol,
+		AllowPrivate: f.AllowPrivate, DenyCIDRs: deny, BlockedPorts: f.BlockedPorts, AllowSMTP: f.AllowSMTP,
+		MaxConnections: f.MaxConnections, RevokedFile: f.RevokedFile,
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})),
 	}
 	if f.TLSCert != "" {
@@ -368,7 +395,10 @@ func demo(args []string) error {
 	if err != nil {
 		return err
 	}
-	pin := sha256.Sum256(der)
+	pin, err := singlink.PinFromCertificate(der)
+	if err != nil {
+		return err
+	}
 	srv, err := singlink.NewServer(singlink.ServerConfig{
 		Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)),
 		TLS: &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: ck}}},
@@ -390,7 +420,7 @@ func demo(args []string) error {
 		return err
 	}
 	p := &singlink.Profile{Name: "SingLink 本機示範節點", Server: ln.Addr().String(), Transport: "tls", SNI: "singlink-demo.local",
-		Pin: pin[:], ServerKey: key.Public(), Token: raw, Device: device}
+		Pin: pin, ServerKey: key.Public(), Token: raw, Device: device}
 	fmt.Println("node:", ln.Addr().String(), "(TLS 1.3, pinned self-signed certificate)")
 	fmt.Println("link:")
 	fmt.Println(p.Link())

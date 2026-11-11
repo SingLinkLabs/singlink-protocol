@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/singlinklabs/singlink-protocol/singlink"
-	"github.com/singlinklabs/singlink-protocol/socks5"
+	"github.com/SingLinkLabs/singlink-protocol/singlink"
+	"github.com/SingLinkLabs/singlink-protocol/socks5"
 )
 
 // Status is a snapshot of the running engine.
@@ -31,57 +32,94 @@ type Status struct {
 
 // Engine is safe for concurrent use. The zero value is ready.
 type Engine struct {
-	mu      sync.Mutex
-	client  *singlink.Client
-	socks   *socks5.Server
-	listen  string
-	since   time.Time
-	lastErr string
+	mu       sync.Mutex
+	starting bool
+	client   *singlink.Client
+	socks    *socks5.Server
+	listen   string
+	user     string
+	pass     string
+	since    time.Time
+	lastErr  string
+}
+
+// Options tunes Start.
+type Options struct {
+	// Auth requires a random SOCKS5 username/password (returned by
+	// Credentials) so other local users and apps cannot use the tunnel.
+	// Leave it off when the port is used as the system proxy, since many
+	// applications do not support SOCKS5 authentication.
+	Auth bool
 }
 
 // Start connects the profile in link and listens on listen (default
-// 127.0.0.1:1080). It verifies the node with a short handshake first so a
-// wrong link or expired token is reported immediately.
-func (e *Engine) Start(link, listen string) error {
+// 127.0.0.1:1080, must be a loopback IP literal). It verifies the node with
+// a short handshake first so a wrong link or expired token is reported
+// immediately. Status and Stop stay responsive while it runs.
+func (e *Engine) Start(link, listen string, opts ...Options) error {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.socks != nil {
+	if e.socks != nil || e.starting {
+		e.mu.Unlock()
 		return errors.New("already running")
 	}
+	e.starting = true
+	e.mu.Unlock()
+
+	c, s, addr, user, pass, err := start(link, listen, o)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.starting = false
+	if err != nil {
+		e.lastErr = err.Error()
+		return err
+	}
+	e.client, e.socks, e.listen, e.user, e.pass, e.since, e.lastErr = c, s, addr, user, pass, time.Now(), ""
+	return nil
+}
+
+func start(link, listen string, o Options) (*singlink.Client, *socks5.Server, string, string, string, error) {
 	if listen == "" {
 		listen = "127.0.0.1:1080"
 	}
 	p, err := singlink.ParseLink(link)
 	if err != nil {
-		e.lastErr = err.Error()
-		return err
+		return nil, nil, "", "", "", err
 	}
-	if host, _, err := net.SplitHostPort(listen); err != nil || !isLoopback(host) {
-		err := fmt.Errorf("listen address must be on loopback, got %q", listen)
-		e.lastErr = err.Error()
-		return err
+	host, _, err := net.SplitHostPort(listen)
+	if ip, perr := netip.ParseAddr(host); err != nil || perr != nil || !ip.IsLoopback() {
+		return nil, nil, "", "", "", fmt.Errorf("listen address must be a loopback IP such as 127.0.0.1:1080, got %q", listen)
 	}
 	c := singlink.NewClient(p)
 	if err := check(c); err != nil {
-		e.lastErr = err.Error()
-		return err
+		return nil, nil, "", "", "", err
 	}
 	s := &socks5.Server{Client: c}
+	if o.Auth {
+		s.Username, s.Password = randomToken(), randomToken()
+	}
 	addr, err := s.Start(listen)
 	if err != nil {
-		e.lastErr = err.Error()
-		return err
+		return nil, nil, "", "", "", err
 	}
-	e.client, e.socks, e.listen, e.since, e.lastErr = c, s, addr.String(), time.Now(), ""
-	return nil
+	return c, s, addr.String(), s.Username, s.Password, nil
 }
 
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+func randomToken() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return singlink.B64.EncodeToString(b)
+}
+
+// Credentials returns the SOCKS5 username and password ("" without Auth).
+func (e *Engine) Credentials() (string, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.user, e.pass
 }
 
 // check performs one authenticated handshake to a well-known destination.
@@ -119,6 +157,9 @@ func (e *Engine) Status() Status {
 	defer e.mu.Unlock()
 	st := Status{Running: e.socks != nil, Listen: e.listen, LastError: e.lastErr}
 	if e.client != nil {
+		if st.LastError == "" {
+			st.LastError = e.client.LastError()
+		}
 		st.Up = e.client.Stats.Up.Load()
 		st.Down = e.client.Stats.Down.Load()
 		st.Conns = e.client.Stats.Conns.Load()
@@ -150,6 +191,9 @@ func (e *Engine) ExitIP(timeout time.Duration) (string, error) {
 }
 
 func (e *Engine) httpClient(timeout time.Duration) (*http.Client, error) {
+	if timeout <= 0 || timeout > time.Minute {
+		timeout = 10 * time.Second
+	}
 	e.mu.Lock()
 	c := e.client
 	e.mu.Unlock()

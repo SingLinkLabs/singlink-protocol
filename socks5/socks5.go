@@ -5,6 +5,7 @@ package socks5
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -14,26 +15,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/singlinklabs/singlink-protocol/singlink"
+	"github.com/SingLinkLabs/singlink-protocol/singlink"
 )
 
 // Server accepts SOCKS5 clients.
 type Server struct {
 	Client *singlink.Client
+	// Username and Password, if set, require RFC 1929 authentication so
+	// other local users and apps cannot borrow the tunnel.
+	Username, Password string
+	// MaxSessions caps concurrent client connections (default 512).
+	MaxSessions int
 
-	mu   sync.Mutex
-	ln   net.Listener
-	wg   sync.WaitGroup
-	open map[net.Conn]struct{}
+	mu     sync.Mutex
+	ln     net.Listener
+	wg     sync.WaitGroup
+	closed bool
+	open   map[io.Closer]struct{}
 }
 
 // ListenAndServe listens on addr and serves until Close.
 func (s *Server) ListenAndServe(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+	a, err := s.Start(addr)
 	if err != nil {
 		return err
 	}
-	s.Serve(ln)
+	_ = a
+	s.wg.Wait()
 	return nil
 }
 
@@ -43,47 +51,83 @@ func (s *Server) Start(addr string) (net.Addr, error) {
 	if err != nil {
 		return nil, err
 	}
-	go s.Serve(ln)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		ln.Close()
+		return nil, net.ErrClosed
+	}
+	s.ln = ln
+	if s.open == nil {
+		s.open = map[io.Closer]struct{}{}
+	}
+	if s.MaxSessions == 0 {
+		s.MaxSessions = 512
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		s.serve(ln)
+	}()
 	return ln.Addr(), nil
 }
 
-// Serve accepts connections on ln.
-func (s *Server) Serve(ln net.Listener) {
-	s.mu.Lock()
-	s.ln = ln
-	if s.open == nil {
-		s.open = map[net.Conn]struct{}{}
-	}
-	s.mu.Unlock()
+func (s *Server) serve(ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			return
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
-		s.track(c, true)
-		s.wg.Add(1)
+		if !s.track(c, true) {
+			c.Close()
+			continue
+		}
 		go func() {
 			defer s.wg.Done()
-			defer s.track(c, false)
+			defer s.untrack(c)
 			defer c.Close()
 			s.handle(c)
 		}()
 	}
 }
 
-func (s *Server) track(c net.Conn, add bool) {
+// track registers a closer; it fails once the server is closed or full.
+// Accepted client connections (handler != false) also take a WaitGroup slot.
+func (s *Server) track(c io.Closer, handler ...bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if add {
-		s.open[c] = struct{}{}
-	} else {
-		delete(s.open, c)
+	if s.closed {
+		return false
 	}
+	if len(handler) > 0 && handler[0] {
+		if len(s.open) >= s.MaxSessions*3 {
+			return false
+		}
+		s.wg.Add(1)
+	}
+	s.open[c] = struct{}{}
+	return true
 }
 
-// Close stops the listener and every open connection.
+func (s *Server) untrack(c io.Closer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.open, c)
+}
+
+// Close stops the listener and every open connection, including the
+// tunnels to the node, and waits for all handlers to return.
 func (s *Server) Close() error {
 	s.mu.Lock()
+	s.closed = true
 	if s.ln != nil {
 		s.ln.Close()
 	}
@@ -116,15 +160,22 @@ func (s *Server) handle(c net.Conn) {
 	if _, err := io.ReadFull(c, methods); err != nil {
 		return
 	}
+	want := byte(0) // no authentication
+	if s.Username != "" {
+		want = 2 // username/password
+	}
 	ok := false
 	for _, m := range methods {
-		ok = ok || m == 0
+		ok = ok || m == want
 	}
 	if !ok {
 		c.Write([]byte{5, 0xff})
 		return
 	}
-	c.Write([]byte{5, 0})
+	c.Write([]byte{5, want})
+	if want == 2 && !s.checkAuth(c) {
+		return
+	}
 
 	var req [3]byte
 	if _, err := io.ReadFull(c, req[:]); err != nil || req[0] != 5 {
@@ -145,6 +196,33 @@ func (s *Server) handle(c net.Conn) {
 	}
 }
 
+// checkAuth runs the RFC 1929 sub-negotiation.
+func (s *Server) checkAuth(c net.Conn) bool {
+	var h [2]byte
+	if _, err := io.ReadFull(c, h[:]); err != nil || h[0] != 1 {
+		return false
+	}
+	user := make([]byte, h[1])
+	if _, err := io.ReadFull(c, user); err != nil {
+		return false
+	}
+	var pl [1]byte
+	if _, err := io.ReadFull(c, pl[:]); err != nil {
+		return false
+	}
+	pass := make([]byte, pl[0])
+	if _, err := io.ReadFull(c, pass); err != nil {
+		return false
+	}
+	good := subtle.ConstantTimeCompare(user, []byte(s.Username))&subtle.ConstantTimeCompare(pass, []byte(s.Password)) == 1
+	if !good {
+		c.Write([]byte{1, 1})
+		return false
+	}
+	c.Write([]byte{1, 0})
+	return true
+}
+
 func (s *Server) connect(c net.Conn, dst string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	up, err := s.Client.DialTCP(ctx, dst)
@@ -154,6 +232,10 @@ func (s *Server) connect(c net.Conn, dst string) {
 		return
 	}
 	defer up.Close()
+	if !s.track(up) {
+		return
+	}
+	defer s.untrack(up)
 	s.Client.Stats.Conns.Add(1)
 	defer s.Client.Stats.Conns.Add(-1)
 	// Reply before the SingLink request is answered so the application's first
@@ -187,12 +269,20 @@ func (s *Server) associate(c net.Conn) {
 		return
 	}
 	defer pc.Close()
+	if !s.track(pc) {
+		return
+	}
+	defer s.untrack(pc)
 	s.Client.Stats.Conns.Add(1)
 	defer s.Client.Stats.Conns.Add(-1)
 	reply(c, repOK, uc.LocalAddr().(*net.UDPAddr))
 
 	var peerMu sync.Mutex
 	var peer netip.AddrPort
+	ctlIP := netip.Addr{}
+	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+		ctlIP = ap.Addr().Unmap()
+	}
 	done := make(chan struct{})
 	go func() {
 		// The association lives as long as the TCP control connection.
@@ -232,7 +322,13 @@ func (s *Server) associate(c net.Conn) {
 		if err != nil {
 			continue
 		}
+		// Only the application that opened the association may use it:
+		// same IP as the control connection, first source port wins.
 		peerMu.Lock()
+		if from.Addr().Unmap() != ctlIP || (peer.IsValid() && peer != from) {
+			peerMu.Unlock()
+			continue
+		}
 		peer = from
 		peerMu.Unlock()
 		a, err := singlink.ParseAddr(dst)
@@ -250,12 +346,14 @@ func pipe(a, b net.Conn) {
 	wg.Add(2)
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
-		io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+		_, err := io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok && err == nil {
 			cw.CloseWrite()
-		} else {
-			dst.Close()
+			return
 		}
+		// Error or truncation: tear down both sides.
+		a.Close()
+		b.Close()
 	}
 	go cp(a, b)
 	go cp(b, a)
