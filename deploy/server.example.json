@@ -1,0 +1,12 @@
+{
+  "listen": ":443",
+  "private_key": "<private_key from: sl3 keygen server>",
+  "issuers": ["<public_key from: sl3 keygen issuer>"],
+  "tls_cert": "/etc/sl3/fullchain.pem",
+  "tls_key": "/etc/sl3/privkey.pem",
+  "fallback": "127.0.0.1:8080",
+  "allow_private": false,
+  "blocked_ports": [25],
+  "revoked_file": "/etc/sl3/revoked.txt",
+  "log_level": "info"
+}
