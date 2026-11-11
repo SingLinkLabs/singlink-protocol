@@ -35,7 +35,7 @@ type Engine struct {
 	mu       sync.Mutex
 	starting bool
 	client   *singlink.Client
-	socks    *socks5.Server
+	stop     func() // stops the running transport (SOCKS5 port, TUN, ...)
 	listen   string
 	user     string
 	pass     string
@@ -61,16 +61,47 @@ func (e *Engine) Start(link, listen string, opts ...Options) error {
 	if len(opts) > 0 {
 		o = opts[0]
 	}
-	e.mu.Lock()
-	if e.socks != nil || e.starting {
-		e.mu.Unlock()
+	if !e.begin() {
 		return errors.New("already running")
 	}
-	e.starting = true
-	e.mu.Unlock()
-
 	c, s, addr, user, pass, err := start(link, listen, o)
+	var stop func()
+	if s != nil {
+		stop = func() { s.Close() }
+	}
+	return e.finish(c, stop, addr, user, pass, err)
+}
 
+// StartWith verifies the node in link like Start and then hands the client
+// to run, which starts some other transport (for example a TUN device) and
+// returns its stop function. Status, Probe and ExitIP then work as usual.
+func (e *Engine) StartWith(link, label string, run func(*singlink.Client) (stop func(), err error)) error {
+	if !e.begin() {
+		return errors.New("already running")
+	}
+	p, err := singlink.ParseLink(link)
+	if err != nil {
+		return e.finish(nil, nil, "", "", "", err)
+	}
+	c := singlink.NewClient(p)
+	if err := check(c); err != nil {
+		return e.finish(nil, nil, "", "", "", err)
+	}
+	stop, err := run(c)
+	return e.finish(c, stop, label, "", "", err)
+}
+
+func (e *Engine) begin() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stop != nil || e.starting {
+		return false
+	}
+	e.starting = true
+	return true
+}
+
+func (e *Engine) finish(c *singlink.Client, stop func(), listen, user, pass string, err error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.starting = false
@@ -78,7 +109,7 @@ func (e *Engine) Start(link, listen string, opts ...Options) error {
 		e.lastErr = err.Error()
 		return err
 	}
-	e.client, e.socks, e.listen, e.user, e.pass, e.since, e.lastErr = c, s, addr, user, pass, time.Now(), ""
+	e.client, e.stop, e.listen, e.user, e.pass, e.since, e.lastErr = c, stop, listen, user, pass, time.Now(), ""
 	return nil
 }
 
@@ -143,11 +174,11 @@ func check(c *singlink.Client) error {
 // Stop closes the local port and all connections.
 func (e *Engine) Stop() {
 	e.mu.Lock()
-	s := e.socks
-	e.socks, e.client = nil, nil
+	stop := e.stop
+	e.stop, e.client = nil, nil
 	e.mu.Unlock()
-	if s != nil {
-		s.Close()
+	if stop != nil {
+		stop()
 	}
 }
 
@@ -155,7 +186,7 @@ func (e *Engine) Stop() {
 func (e *Engine) Status() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	st := Status{Running: e.socks != nil, Listen: e.listen, LastError: e.lastErr}
+	st := Status{Running: e.stop != nil, Listen: e.listen, LastError: e.lastErr}
 	if e.client != nil {
 		if st.LastError == "" {
 			st.LastError = e.client.LastError()
