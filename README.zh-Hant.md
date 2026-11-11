@@ -1,10 +1,10 @@
-# SingLink 3.0 協議（SL3）
+# SingLink 協議（SingLink）
 
-SL3 是 SingLinkLabs 的開源代理／VPN 協議。它保留 VLESS、Trojan 快的地方：TLS 連線一開始只送一次請求，第一段資料跟請求一起送出，不多等一個來回。在這個基礎上，它補上正式營運 VPN 服務需要的能力。
+SingLink 是 SingLinkLabs 的開源代理／VPN 協議。它保留 VLESS、Trojan 快的地方：TLS 連線一開始只送一次請求，第一段資料跟請求一起送出，不多等一個來回。在這個基礎上，它補上正式營運 VPN 服務需要的能力。
 
 ## 跟 VLESS 比，多了什麼
 
-| | VLESS | SingLink 3.0 |
+| | VLESS | SingLink Protocol |
 |---|---|---|
 | 誰能連線 | 拿到共用 UUID 就能連 | 必須持有帳號後台簽發的**權限憑證**，而且要有綁定的裝置金鑰 |
 | 節點上的用戶權限 | 協議本身沒有（要靠面板） | 到期時間、TCP／UDP 權限、限速、同時連線數、吊銷，**每個節點離線就能驗證並執行**，節點上不放用戶資料庫 |
@@ -18,7 +18,7 @@ SL3 是 SingLinkLabs 的開源代理／VPN 協議。它保留 VLESS、Trojan 快
 
 ## 狀態
 
-**版本 3.0.0-draft（草案）。**
+**版本 1.0.0-draft（草案）。**
 
 - 只用 Go 標準庫的成熟加密元件，不用任何第三方套件，也沒有自創加密演算法。
 - 測試已全部通過：協議核心的單元與端對端測試（含競態檢查），以及 Flutter 客戶端的 17 項測試，其中一項連真實核心實測。
@@ -29,21 +29,21 @@ SL3 是 SingLinkLabs 的開源代理／VPN 協議。它保留 VLESS、Trojan 快
 | 路徑 | 內容 |
 |---|---|
 | `SPEC.md` | 協議規格（英文，對外開源用） |
-| `core/sl3` | 協議核心（Go） |
+| `core/singlink` | 協議核心（Go） |
 | `core/socks5` | 本機 SOCKS5 入口（含 UDP） |
-| `core/cmd/sl3` | 命令列工具：產生金鑰、簽發憑證、產生連結、跑節點、跑客戶端、一鍵本機示範 |
-| `core/ffi` | 給 App 用的 C 介面 `libsl3` |
-| `app/` | Flutter 客戶端殼（macOS），透過 `dart:ffi` 載入 `libsl3` |
+| `core/cmd/singlink` | 命令列工具：產生金鑰、簽發憑證、產生連結、跑節點、跑客戶端、一鍵本機示範 |
+| `core/ffi` | 給 App 用的 C 介面 `libsinglink` |
+| `app/` | Flutter 客戶端殼（macOS），透過 `dart:ffi` 載入 `libsinglink` |
 | `deploy/` | 節點設定範例與 systemd 服務檔 |
 
 ## 一分鐘試用（本機）
 
 ```sh
 cd core
-./build/sl3 demo -link-only     # 在本機開一個示範節點，印出 sl3:// 連結
+./build/singlink demo -link-only     # 在本機開一個示範節點，印出 singlink:// 連結
 ```
 
-然後打開 `app/build/macos/Build/Products/Release/sl3_client.app`，貼上連結，按連線。連線後系統或瀏覽器的 SOCKS5 代理設為 `127.0.0.1:1080` 即可。
+然後打開 `app/build/macos/Build/Products/Release/singlink_client.app`，貼上連結，按連線。連線後系統或瀏覽器的 SOCKS5 代理設為 `127.0.0.1:1080` 即可。
 
 ## 上線時的建議做法
 
