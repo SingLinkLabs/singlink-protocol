@@ -4,7 +4,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/singlink server -c /etc/singlink/server.json
+# server.json (it holds the node private key) stays root-only at
+# /etc/singlink/server.json (chmod 600); systemd hands a private copy to the
+# service. TLS files and revoked.txt are passed the same way.
+LoadCredential=server.json:/etc/singlink/server.json
+LoadCredential=fullchain.pem:/etc/singlink/fullchain.pem
+LoadCredential=privkey.pem:/etc/singlink/privkey.pem
+ExecStart=/usr/local/bin/singlink server -c ${CREDENTIALS_DIRECTORY}/server.json
 DynamicUser=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -12,9 +18,32 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadOnlyPaths=/etc/singlink
-Restart=on-failure
-LimitNOFILE=1048576
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Defence in depth for the destination policy: never reach internal ranges.
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10
+IPAddressAllow=localhost
+MemoryMax=2G
+LimitNOFILE=65536
+Restart=always
+RestartSec=1
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

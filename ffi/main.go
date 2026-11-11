@@ -14,11 +14,12 @@ import "C"
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"time"
 	"unsafe"
 
-	"github.com/singlinklabs/singlink-protocol/engine"
-	"github.com/singlinklabs/singlink-protocol/singlink"
+	"github.com/SingLinkLabs/singlink-protocol/engine"
+	"github.com/SingLinkLabs/singlink-protocol/singlink"
 )
 
 var eng engine.Engine
@@ -33,13 +34,23 @@ func out(v any) *C.char {
 
 func fail(err error) *C.char { return out(map[string]any{"ok": false, "error": err.Error()}) }
 
+// guard turns a panic into an error reply instead of killing the host app.
+// Every export is synchronous and may block: call it off the UI thread.
+func guard(res **C.char) {
+	if r := recover(); r != nil {
+		*res = fail(fmt.Errorf("internal error: %v", r))
+	}
+}
+
 //export SingLinkVersion
-func SingLinkVersion() *C.char {
+func SingLinkVersion() (res *C.char) {
+	defer guard(&res)
 	return out(map[string]string{"version": singlink.Version, "protocol": singlink.ProtocolName})
 }
 
 //export SingLinkParseLink
-func SingLinkParseLink(link *C.char) *C.char {
+func SingLinkParseLink(link *C.char) (res *C.char) {
+	defer guard(&res)
 	p, err := singlink.ParseLink(C.GoString(link))
 	if err != nil {
 		return fail(err)
@@ -66,26 +77,30 @@ func SingLinkParseLink(link *C.char) *C.char {
 		"caps":      caps,
 		"rateKbps":  t.RateKbps,
 		"maxConns":  t.MaxConns,
-	}})
+	}, "warnings": p.Warnings()})
 }
 
 //export SingLinkStart
-func SingLinkStart(config *C.char) *C.char {
+func SingLinkStart(config *C.char) (res *C.char) {
+	defer guard(&res)
 	var cfg struct {
 		Link   string `json:"link"`
 		Listen string `json:"listen"`
+		Auth   bool   `json:"auth"`
 	}
 	if err := json.Unmarshal([]byte(C.GoString(config)), &cfg); err != nil {
 		return fail(err)
 	}
-	if err := eng.Start(cfg.Link, cfg.Listen); err != nil {
+	if err := eng.Start(cfg.Link, cfg.Listen, engine.Options{Auth: cfg.Auth}); err != nil {
 		return fail(err)
 	}
-	return out(map[string]any{"ok": true})
+	user, pass := eng.Credentials()
+	return out(map[string]any{"ok": true, "username": user, "password": pass})
 }
 
 //export SingLinkStop
-func SingLinkStop() *C.char {
+func SingLinkStop() (res *C.char) {
+	defer guard(&res)
 	eng.Stop()
 	return out(map[string]any{"ok": true})
 }
@@ -94,7 +109,8 @@ func SingLinkStop() *C.char {
 func SingLinkStatus() *C.char { return out(eng.Status()) }
 
 //export SingLinkProbe
-func SingLinkProbe(url *C.char, timeoutMs C.int) *C.char {
+func SingLinkProbe(url *C.char, timeoutMs C.int) (res *C.char) {
+	defer guard(&res)
 	code, d, err := eng.Probe(C.GoString(url), time.Duration(timeoutMs)*time.Millisecond)
 	if err != nil {
 		return fail(err)
@@ -103,7 +119,8 @@ func SingLinkProbe(url *C.char, timeoutMs C.int) *C.char {
 }
 
 //export SingLinkExitIP
-func SingLinkExitIP(timeoutMs C.int) *C.char {
+func SingLinkExitIP(timeoutMs C.int) (res *C.char) {
+	defer guard(&res)
 	ip, err := eng.ExitIP(time.Duration(timeoutMs) * time.Millisecond)
 	if err != nil {
 		return fail(err)

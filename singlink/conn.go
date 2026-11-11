@@ -1,6 +1,7 @@
 package singlink
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -90,6 +91,9 @@ func (c *Conn) fail(err error) {
 	c.closeOnce.Do(func() {
 		c.hsErr = err
 		close(c.hsDone)
+		if err != nil && err != net.ErrClosed && c.client != nil {
+			c.client.lastErr.Store(err.Error())
+		}
 	})
 }
 
@@ -97,7 +101,12 @@ func (c *Conn) fail(err error) {
 func (c *Conn) finishHandshake(hs *clientHandshake) {
 	F := make([]byte, x25519Len)
 	if _, err := io.ReadFull(c.raw, F); err != nil {
-		c.fail(errors.New("singlink: server closed the connection during handshake (rejected or not an SingLink server)"))
+		c.fail(ErrRejected)
+		return
+	}
+	if bytes.HasPrefix(F, []byte("HTTP/")) {
+		// The node handed us to its fallback website.
+		c.fail(ErrRejected)
 		return
 	}
 	c2s, s2c, err := hs.finish(F)

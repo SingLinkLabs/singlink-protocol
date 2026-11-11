@@ -9,14 +9,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"io"
+	"net"
 	"time"
 )
 
 // Handshake (Noise "NK"-like, one round trip, 0-RTT request):
 //
-//	C -> S  E || CT || seal_ek(len) || seal_ek(header)
-//	S -> C  F || frames sealed with s2c
+//	C -> S  E || CT || seal_ek(len) || seal_ek(header)        (one TLS record)
+//	S -> C  F || frames sealed with s2c                       (one write, first frame STATUS)
 //
 //	ss_x  = X25519(e, S_x)          ss_pq = ML-KEM-768 shared secret (CT to S_kem)
 //	salt  = SHA256(label || "salt" || server_id || E || CT)
@@ -27,10 +27,15 @@ import (
 //
 // Header plaintext:
 //
-//	ver(1) ts(8) cmd(1) addr tokenLen(2) token sig(64) earlyLen(2) early padLen(2) pad
+//	ver(1) ts(8) cmd(1) addr tokenLen(2) token earlyLen(2) early padLen(2) pad sig(64)
 //
-// sig = Ed25519(device, SHA256("SingLink pop" || salt || ver..token)) proves that
-// the sender holds the device key the token was issued to.
+// sig = Ed25519(device, SHA256("SingLink pop" || salt || header without sig))
+// proves that the sender holds the device key the token was issued to, and
+// binds every header field (including early data) to that device.
+
+// maxFlightLen is the largest first flight. Over TLS it MUST fit in one
+// record, so the node can judge a connection from a single read.
+const maxFlightLen = 16 * 1024
 
 // plaintextPrefixes are first bytes of protocols a prober is likely to send.
 // Clients never produce an ephemeral key that starts with one of them, so a
@@ -63,13 +68,6 @@ func deriveKey(secret, salt []byte, info string) ([]byte, error) {
 	return hkdf.Key(sha256.New, secret, salt, info, 32)
 }
 
-// x25519Wire clears the top bit that clients randomise on the wire.
-func x25519Wire(b []byte) (*ecdh.PublicKey, error) {
-	k := append([]byte{}, b...)
-	k[31] &= 0x7f
-	return ecdh.X25519().NewPublicKey(k)
-}
-
 type request struct {
 	ts    time.Time
 	cmd   Cmd
@@ -96,9 +94,6 @@ func buildFirstFlight(spk *ServerPublicKey, device ed25519.PrivateKey, req *requ
 			return nil, nil, err
 		}
 		E = e.PublicKey().Bytes()
-		var r [1]byte
-		rand.Read(r[:])
-		E[31] |= r[0] & 0x80 // hide the always-zero top bit
 		if !looksLikePlaintext(E) {
 			break
 		}
@@ -115,24 +110,23 @@ func buildFirstFlight(spk *ServerPublicKey, device ed25519.PrivateKey, req *requ
 		return nil, nil, err
 	}
 
-	// Header.
-	h := make([]byte, 0, 256+len(req.token)+len(req.early)+padMax)
+	h := make([]byte, 0, 512+len(req.token)+len(req.early)+padMax)
 	h = append(h, wireVersion)
 	h = binary.BigEndian.AppendUint64(h, uint64(req.ts.Unix()))
 	h = append(h, byte(req.cmd))
 	h = req.dst.appendTo(h)
 	h = binary.BigEndian.AppendUint16(h, uint16(len(req.token)))
 	h = append(h, req.token...)
-	sig := ed25519.Sign(device, hash([]byte("SingLink pop"), salt, h))
-	h = append(h, sig...)
 	h = binary.BigEndian.AppendUint16(h, uint16(len(req.early)))
 	h = append(h, req.early...)
-	pad := randInt(padMax + 1)
-	h = binary.BigEndian.AppendUint16(h, uint16(pad))
-	h = append(h, make([]byte, pad)...)
-	if len(h) > maxHeaderLen {
+	room := maxHeaderLen - len(h) - 2 - ed25519.SignatureSize
+	if room < 0 {
 		return nil, nil, errors.New("singlink: request header too large")
 	}
+	pad := randInt(min(padMax, room) + 1)
+	h = binary.BigEndian.AppendUint16(h, uint16(pad))
+	h = append(h, make([]byte, pad)...)
+	h = append(h, ed25519.Sign(device, hash([]byte("SingLink pop"), salt, h))...)
 
 	cs, err := newCipherState(ek)
 	if err != nil {
@@ -174,7 +168,7 @@ func trafficKeys(secret, ee, salt, F, hashH []byte) (c2s, s2c *cipherState, err 
 
 // finish completes the client side after reading the server's F.
 func (hs *clientHandshake) finish(F []byte) (c2s, s2c *cipherState, err error) {
-	fpub, err := x25519Wire(F)
+	fpub, err := ecdh.X25519().NewPublicKey(F)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -185,17 +179,29 @@ func (hs *clientHandshake) finish(F []byte) (c2s, s2c *cipherState, err error) {
 	return trafficKeys(hs.secret, ee, hs.salt, F, hs.hashH)
 }
 
-// recorder keeps every byte read during the handshake so an unauthenticated
-// connection can be replayed verbatim to the fallback server.
-type recorder struct {
-	r   io.Reader
-	buf []byte
-}
-
-func (rc *recorder) Read(p []byte) (int, error) {
-	n, err := rc.r.Read(p)
-	rc.buf = append(rc.buf, p[:n]...)
-	return n, err
+// readFlight collects a client's first flight without ever blocking on a
+// length taken from the data, so every non-client looks the same in time.
+//
+// Over TLS the flight is one record and a single Read returns all of it.
+// Over raw TCP bytes are gathered until the stream is idle for idle.
+func readFlight(c net.Conn, isTLS bool, first, idle time.Duration) ([]byte, error) {
+	buf := make([]byte, maxFlightLen)
+	c.SetReadDeadline(time.Now().Add(first))
+	n, err := c.Read(buf)
+	if n == 0 || isTLS || looksLikePlaintext(buf[:min(n, 4)]) {
+		return buf[:n], err
+	}
+	for n < len(buf) && err == nil {
+		c.SetReadDeadline(time.Now().Add(idle))
+		var m int
+		m, err = c.Read(buf[n:])
+		n += m
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		err = nil
+	}
+	return buf[:n], err
 }
 
 // serverHandshake is the result of a successfully decrypted first flight.
@@ -209,100 +215,100 @@ type serverHandshake struct {
 	hashH  []byte
 }
 
-// readFirstFlight decrypts and parses a client's first flight. Any error
-// means the peer must be treated as unauthenticated.
-func readFirstFlight(r io.Reader, key *ServerPrivateKey) (*serverHandshake, error) {
-	fixed := make([]byte, firstFlightFixed)
-	if _, err := io.ReadFull(r, fixed[:4]); err != nil {
-		return nil, err
-	}
-	if looksLikePlaintext(fixed[:4]) {
+// parseFirstFlight decrypts a complete first flight with one of keys (the
+// current key first, then keys kept for rotation). Any error means the peer
+// must be treated as unauthenticated.
+func parseFirstFlight(b []byte, keys []*ServerPrivateKey) (*serverHandshake, error) {
+	if len(b) < firstFlightFixed || looksLikePlaintext(b[:4]) {
 		return nil, errProbe
 	}
-	if _, err := io.ReadFull(r, fixed[4:]); err != nil {
-		return nil, err
-	}
-	E := fixed[:x25519Len]
-	ct := fixed[x25519Len : x25519Len+mlkemCTLen]
-	epub, err := x25519Wire(E)
+	E := b[:x25519Len]
+	ct := b[x25519Len : x25519Len+mlkemCTLen]
+	sealedLen := b[x25519Len+mlkemCTLen : firstFlightFixed]
+	epub, err := ecdh.X25519().NewPublicKey(E)
 	if err != nil {
 		return nil, errProbe
 	}
-	ssx, err := key.x.ECDH(epub)
-	if err != nil {
-		return nil, errProbe
+	for _, key := range keys {
+		ssx, err := key.x.ECDH(epub)
+		if err != nil {
+			return nil, errProbe
+		}
+		sspq, err := key.kem.Decapsulate(ct)
+		if err != nil {
+			return nil, errProbe
+		}
+		secret := append(append([]byte{}, ssx...), sspq...)
+		salt := hash([]byte(label), []byte("salt"), key.pub.id[:], E, ct)
+		ek, err := deriveKey(secret, salt, "singlink early")
+		if err != nil {
+			return nil, err
+		}
+		cs, err := newCipherState(ek)
+		if err != nil {
+			return nil, err
+		}
+		var l [2]byte
+		if _, err := cs.open(l[:0], sealedLen); err != nil {
+			continue // not this key
+		}
+		hl := int(binary.BigEndian.Uint16(l[:]))
+		if hl > maxHeaderLen || len(b) != firstFlightFixed+hl+tagLen {
+			return nil, errProbe
+		}
+		sealed := b[firstFlightFixed:]
+		h, err := cs.open(nil, sealed)
+		if err != nil {
+			return nil, errProbe
+		}
+		hs := &serverHandshake{E: append([]byte{}, E...), secret: secret, salt: salt, hashH: hash(sealedLen, sealed)}
+		if err := hs.parseHeader(h); err != nil {
+			return nil, errProbe
+		}
+		return hs, nil
 	}
-	sspq, err := key.kem.Decapsulate(ct)
-	if err != nil {
-		return nil, errProbe
-	}
-	secret := append(append([]byte{}, ssx...), sspq...)
-	salt := hash([]byte(label), []byte("salt"), key.pub.id[:], E, ct)
-	ek, err := deriveKey(secret, salt, "singlink early")
-	if err != nil {
-		return nil, err
-	}
-	cs, err := newCipherState(ek)
-	if err != nil {
-		return nil, err
-	}
-	var l [2]byte
-	if _, err := cs.open(l[:0], fixed[x25519Len+mlkemCTLen:]); err != nil {
-		return nil, errProbe
-	}
-	hl := int(binary.BigEndian.Uint16(l[:]))
-	if hl > maxHeaderLen {
-		return nil, errProbe
-	}
-	sealed := make([]byte, hl+tagLen)
-	if _, err := io.ReadFull(r, sealed); err != nil {
-		return nil, err
-	}
-	hashH := hash(fixed[x25519Len+mlkemCTLen:], sealed)
-	h, err := cs.open(nil, sealed)
-	if err != nil {
-		return nil, errProbe
-	}
-	hs := &serverHandshake{E: append([]byte{}, E...), secret: secret, salt: salt, hashH: hashH}
-	if err := hs.parseHeader(h); err != nil {
-		return nil, errProbe
-	}
-	return hs, nil
+	return nil, errProbe
 }
 
 func (hs *serverHandshake) parseHeader(h []byte) error {
-	full := h
-	if len(h) < 1+8+1 || h[0] != wireVersion {
+	if len(h) < 1+8+1+ed25519.SignatureSize || h[0] != wireVersion {
 		return errBadFrame
 	}
-	hs.req.ts = time.Unix(int64(binary.BigEndian.Uint64(h[1:9])), 0)
-	hs.req.cmd = Cmd(h[9])
-	dst, rest, err := decodeAddr(h[10:])
+	hs.signed = h[:len(h)-ed25519.SignatureSize]
+	hs.sig = h[len(h)-ed25519.SignatureSize:]
+	b := hs.signed
+	hs.req.ts = time.Unix(int64(binary.BigEndian.Uint64(b[1:9])), 0)
+	hs.req.cmd = Cmd(b[9])
+	dst, rest, err := decodeAddr(b[10:])
 	if err != nil {
 		return err
 	}
 	hs.req.dst = dst
-	if len(rest) < 2 {
+	field := func() ([]byte, error) {
+		if len(rest) < 2 {
+			return nil, errBadFrame
+		}
+		n := int(binary.BigEndian.Uint16(rest))
+		if len(rest) < 2+n {
+			return nil, errBadFrame
+		}
+		f := rest[2 : 2+n]
+		rest = rest[2+n:]
+		return f, nil
+	}
+	if hs.req.token, err = field(); err != nil {
+		return err
+	}
+	if hs.req.early, err = field(); err != nil {
+		return err
+	}
+	if len(hs.req.early) > MaxEarlyData {
 		return errBadFrame
 	}
-	tl := int(binary.BigEndian.Uint16(rest))
-	rest = rest[2:]
-	if len(rest) < tl+ed25519.SignatureSize+2 {
-		return errBadFrame
+	if _, err = field(); err != nil { // padding
+		return err
 	}
-	hs.req.token = rest[:tl]
-	hs.signed = full[:len(full)-len(rest)+tl]
-	hs.sig = rest[tl : tl+ed25519.SignatureSize]
-	rest = rest[tl+ed25519.SignatureSize:]
-	el := int(binary.BigEndian.Uint16(rest))
-	rest = rest[2:]
-	if len(rest) < el+2 || el > MaxEarlyData {
-		return errBadFrame
-	}
-	hs.req.early = rest[:el]
-	rest = rest[el:]
-	pl := int(binary.BigEndian.Uint16(rest))
-	if len(rest[2:]) != pl {
+	if len(rest) != 0 {
 		return errBadFrame
 	}
 	return nil
@@ -319,7 +325,7 @@ func (hs *serverHandshake) accept() (F []byte, c2s, s2c *cipherState, err error)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	epub, err := x25519Wire(hs.E)
+	epub, err := ecdh.X25519().NewPublicKey(hs.E)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -328,9 +334,6 @@ func (hs *serverHandshake) accept() (F []byte, c2s, s2c *cipherState, err error)
 		return nil, nil, nil, err
 	}
 	F = f.PublicKey().Bytes()
-	var r [1]byte
-	rand.Read(r[:])
-	F[31] |= r[0] & 0x80
 	c2s, s2c, err = trafficKeys(hs.secret, ee, hs.salt, F, hs.hashH)
 	return F, c2s, s2c, err
 }

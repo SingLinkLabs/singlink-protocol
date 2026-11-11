@@ -6,8 +6,10 @@
 //
 //   - an inner hybrid key exchange (X25519 + ML-KEM-768), so the payload stays
 //     encrypted end to end even when the outer TLS is terminated by a CDN or
-//     load balancer, and stays confidential against "harvest now, decrypt
-//     later" quantum attacks;
+//     load balancer. Recorded traffic stays confidential against a future
+//     quantum computer as long as the node's static ML-KEM key is not
+//     compromised (there is no post-quantum forward secrecy; rotate node
+//     keys, see SPEC.md §5.4);
 //   - signed permission tokens (Ed25519) instead of a shared UUID, so every
 //     node can authorise users, plans and capabilities without a user
 //     database, and a token leaked from one node is useless without the
@@ -49,7 +51,7 @@ const (
 	maxFrameData = 16 * 1024
 	maxFramePad  = 1024
 	maxBodyLen   = 3 + maxFrameData + maxFramePad
-	maxHeaderLen = 16 * 1024
+	maxHeaderLen = maxFlightLen - firstFlightFixed - tagLen
 )
 
 // Cmd is the request command carried in the client header.
@@ -129,7 +131,12 @@ func (e *StatusError) Error() string {
 }
 
 var (
-	errBadFrame   = errors.New("singlink: malformed frame")
-	errNonceLimit = errors.New("singlink: nonce space exhausted")
-	errProbe      = errors.New("singlink: unauthenticated connection")
+	errBadFrame = errors.New("singlink: malformed frame")
+	errProbe    = errors.New("singlink: unauthenticated connection")
+
+	// ErrRejected means the node did not accept the credentials and treated
+	// the connection like any other visitor. Typical causes: the device
+	// clock is more than 2 minutes off, the token expired more than a day
+	// ago or was revoked, or the link belongs to another node.
+	ErrRejected = errors.New("singlink: node rejected the credentials (check the device clock, then renew the link)")
 )

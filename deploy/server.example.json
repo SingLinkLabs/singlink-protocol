@@ -1,12 +1,17 @@
 {
   "listen": ":443",
   "private_key": "<private_key from: singlink keygen server>",
+  "old_private_keys": [],
   "issuers": ["<public_key from: singlink keygen issuer>"],
-  "tls_cert": "/etc/singlink/fullchain.pem",
-  "tls_key": "/etc/singlink/privkey.pem",
+  "tls_cert": "/run/credentials/singlink.service/fullchain.pem",
+  "tls_key": "/run/credentials/singlink.service/privkey.pem",
   "fallback": "127.0.0.1:8080",
+  "fallback_proxy_protocol": true,
   "allow_private": false,
-  "blocked_ports": [25],
-  "revoked_file": "/etc/singlink/revoked.txt",
+  "deny_cidrs": [],
+  "blocked_ports": [],
+  "allow_smtp": false,
+  "max_connections": 20000,
+  "revoked_file": "",
   "log_level": "info"
 }

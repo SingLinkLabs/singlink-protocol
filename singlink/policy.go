@@ -57,9 +57,26 @@ type limiter struct {
 }
 
 func newLimiter(kbps uint32) *limiter {
-	rate := float64(kbps) * 1000 / 8
-	burst := max(rate/4, 64*1024)
-	return &limiter{rate: rate, burst: burst, tokens: burst, last: time.Now()}
+	l := &limiter{last: time.Now()}
+	l.setRate(kbps)
+	l.tokens = l.burst
+	return l
+}
+
+// setRate changes the rate, keeping (but capping) the current tokens.
+func (l *limiter) setRate(kbps uint32) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rate = float64(kbps) * 1000 / 8
+	l.burst = max(l.rate/4, 64*1024)
+	l.tokens = min(l.tokens, l.burst)
+}
+
+// full reports whether the bucket has refilled completely.
+func (l *limiter) full() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.tokens+time.Since(l.last).Seconds()*l.rate >= l.burst
 }
 
 // wait blocks until n bytes may pass.
@@ -86,10 +103,13 @@ func (l *limiter) wait(ctx context.Context, n int) error {
 	}
 }
 
-// subjects tracks per-subject connection counts and rate limiters.
+// subjects tracks per-subject connection counts and rate limiters. A
+// subject's limiter outlives its connections until its bucket would be full
+// again, so reconnecting does not reset the rate limit.
 type subjects struct {
-	mu sync.Mutex
-	m  map[[16]byte]*subjectState
+	mu    sync.Mutex
+	m     map[[16]byte]*subjectState
+	calls int
 }
 
 type subjectState struct {
@@ -106,6 +126,9 @@ func (s *subjects) acquire(t *Token) (*limiter, bool) {
 	if s.m == nil {
 		s.m = map[[16]byte]*subjectState{}
 	}
+	if s.calls++; s.calls%1024 == 0 {
+		s.evictLocked()
+	}
 	st := s.m[t.Subject]
 	if st == nil {
 		st = &subjectState{}
@@ -114,8 +137,12 @@ func (s *subjects) acquire(t *Token) (*limiter, bool) {
 	if t.MaxConns > 0 && st.conns >= int(t.MaxConns) {
 		return nil, false
 	}
-	if t.RateKbps > 0 && (st.lim == nil || st.kbps != t.RateKbps) {
-		st.lim = newLimiter(t.RateKbps)
+	if t.RateKbps > 0 {
+		if st.lim == nil {
+			st.lim = newLimiter(t.RateKbps)
+		} else if st.kbps != t.RateKbps {
+			st.lim.setRate(t.RateKbps)
+		}
 		st.kbps = t.RateKbps
 	}
 	st.conns++
@@ -130,20 +157,81 @@ func (s *subjects) release(t *Token) {
 	defer s.mu.Unlock()
 	if st := s.m[t.Subject]; st != nil {
 		st.conns--
-		if st.conns <= 0 {
+		if st.conns <= 0 && st.lim == nil {
 			delete(s.m, t.Subject)
 		}
 	}
 }
 
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+// evictLocked drops idle subjects whose bucket has refilled.
+func (s *subjects) evictLocked() {
+	for k, st := range s.m {
+		if st.conns <= 0 && (st.lim == nil || st.lim.full()) {
+			delete(s.m, k)
+		}
+	}
+}
+
+// deniedPrefixes are special-purpose ranges (IANA registries) that a public
+// node must never connect to on behalf of a user.
+var deniedPrefixes = func() []netip.Prefix {
+	var ps []netip.Prefix
+	for _, c := range []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+		"172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16",
+		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+		"::/96", "::ffff:0:0/96", "64:ff9b:1::/48", "100::/64", "2001::/23", "2001:db8::/32",
+		"2002::/16", "fc00::/7", "fe80::/10", "fec0::/10", "ff00::/8",
+	} {
+		ps = append(ps, netip.MustParsePrefix(c))
+	}
+	return ps
+}()
+
+// nat64 is the well-known NAT64 prefix; the embedded IPv4 address is checked.
+var nat64 = netip.MustParsePrefix("64:ff9b::/96")
 
 // publicIP reports whether ip is a globally routable unicast address.
 func publicIP(ip netip.Addr) bool {
 	ip = ip.Unmap()
-	return ip.IsValid() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast() &&
-		!ip.IsMulticast() && !cgnat.Contains(ip)
+	if !ip.IsValid() {
+		return false
+	}
+	if nat64.Contains(ip) {
+		b := ip.As16()
+		return publicIP(netip.AddrFrom4([4]byte(b[12:])))
+	}
+	for _, p := range deniedPrefixes {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// localAddrs caches the node's own interface addresses, which are denied as
+// destinations (services bound to 0.0.0.0 would otherwise be reachable).
+type localAddrs struct {
+	mu   sync.Mutex
+	set  map[netip.Addr]bool
+	when time.Time
+}
+
+func (l *localAddrs) has(ip netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.set == nil || time.Since(l.when) > time.Minute {
+		l.set = map[netip.Addr]bool{}
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, a := range addrs {
+				if p, err := netip.ParsePrefix(a.String()); err == nil {
+					l.set[p.Addr().Unmap()] = true
+				}
+			}
+		}
+		l.when = time.Now()
+	}
+	return l.set[ip.Unmap()]
 }
 
 // resolver resolves destinations and applies the node's destination policy.
@@ -151,6 +239,8 @@ func publicIP(ip netip.Addr) bool {
 type resolver struct {
 	allowPrivate bool
 	blockedPorts map[uint16]bool
+	deny         []netip.Prefix
+	local        localAddrs
 	r            *net.Resolver
 
 	mu    sync.Mutex
@@ -166,7 +256,14 @@ func (rs *resolver) resolve(ctx context.Context, a Addr) (netip.AddrPort, Status
 	if rs.blockedPorts[a.Port] || a.Port == 0 {
 		return netip.AddrPort{}, StatusForbiddenDest
 	}
-	allowed := func(ip netip.Addr) bool { return rs.allowPrivate || publicIP(ip) }
+	allowed := func(ip netip.Addr) bool {
+		for _, p := range rs.deny {
+			if p.Contains(ip.Unmap()) {
+				return false
+			}
+		}
+		return rs.allowPrivate || (publicIP(ip) && !rs.local.has(ip))
+	}
 	if a.IP.IsValid() {
 		if !allowed(a.IP) {
 			return netip.AddrPort{}, StatusForbiddenDest
@@ -190,7 +287,9 @@ func (rs *resolver) resolve(ctx context.Context, a Addr) (netip.AddrPort, Status
 		}
 	}
 	if !pick.IsValid() {
-		return netip.AddrPort{}, StatusForbiddenDest
+		// Same answer as an unresolvable name, so users cannot probe
+		// which internal names exist.
+		return netip.AddrPort{}, StatusDialFailed
 	}
 	rs.mu.Lock()
 	if rs.cache == nil || len(rs.cache) > 4096 {
