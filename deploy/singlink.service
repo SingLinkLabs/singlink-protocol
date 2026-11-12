@@ -1,5 +1,5 @@
 [Unit]
-Description=SingLink Protocol node
+Description=SingLink Beta Protocol node
 After=network-online.target
 Wants=network-online.target
 
