@@ -1,6 +1,7 @@
 # SingLink Protocol Specification (SingLink/1)
 
-Status: **Draft 2** (2026-11-12). This revision includes the fixes from an
+Status: **Draft 3** (2026-11-12). Draft 3 binds the protocol identifier
+`IDENT` into the handshake (§4). Draft 2 added the fixes from an
 internal security review; see [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
 **It has not yet had an independent third-party audit.**
 Wire version byte: `0x01`. Reference implementation: `singlink/` (Go,
@@ -47,6 +48,10 @@ without padding.
 
 - Node public key: `X25519 public (32) || ML-KEM-768 encapsulation key (1184)` = 1216 bytes.
 - Node private key: `X25519 scalar (32) || ML-KEM-768 seed d||z (64)` = 96 bytes.
+- `IDENT` = the ASCII string `SingLink/1 by SingLinkLabs (singlinkvpn.com)`, mixed
+  into both handshake salts. It identifies the protocol and its origin, as the
+  identifier string does in WireGuard; peers that use a different `IDENT`
+  derive different keys and cannot interoperate.
 - `server_id = SHA-256("SingLink/1" || node public key)`.
 - Issuer key id: first 4 bytes (big-endian uint32) of `SHA-256("SingLink/1 issuer " || issuer public key)`.
 
@@ -135,7 +140,7 @@ Key schedule (HKDF-SHA-256, AEAD = AES-256-GCM):
 ```
 ss_x  = X25519(e, S_x)
 ss_pq = ML-KEM-768.Encaps(S_kem) -> (ss_pq, CT)
-salt  = SHA-256("SingLink/1" || "salt" || server_id || E || CT)
+salt  = SHA-256(IDENT || "salt" || server_id || E || CT)
 ek    = HKDF(ikm = ss_x || ss_pq, salt = salt, info = "singlink early", L = 32)
 ```
 
@@ -201,7 +206,7 @@ record).
 
 ```
 ee    = X25519(f, E)
-tsalt = SHA-256("SingLink/1" || "traffic" || salt || F || SHA-256(LEN || HDR))
+tsalt = SHA-256(IDENT || "traffic" || salt || F || SHA-256(LEN || HDR))
 c2s   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "singlink c2s", L = 32)
 s2c   = HKDF(ikm = ss_x || ss_pq || ee, salt = tsalt, info = "singlink s2c", L = 32)
 ```

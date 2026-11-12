@@ -8,6 +8,6 @@ Include the version or commit, a description, and if possible a proof of
 concept. We aim to acknowledge reports within 3 working days.
 
 Supported versions: the latest commit on `main`. The protocol is a draft
-(SingLink/1, spec draft 2); wire-format changes are still possible.
+(SingLink/1, spec draft 3); wire-format changes are still possible.
 
 Past reviews: [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).

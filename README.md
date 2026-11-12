@@ -34,7 +34,7 @@ adds what a production VPN service needs.
 The wire format is in **[SPEC.md](SPEC.md)**. The internal security review
 and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
 
-> **Status: 1.0.0-draft (spec draft 2).** The protocol uses only standard
+> **Status: 1.0.0-draft (spec draft 3).** The protocol uses only standard
 > primitives from the Go standard library. It has been through an internal
 > security review, with a regression test for every finding plus fuzzing, but
 > **not yet a third-party audit**. Don't rely on it for high-risk use until it

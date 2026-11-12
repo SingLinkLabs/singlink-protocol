@@ -22,10 +22,10 @@ import (
 //	S -> C  F || frames sealed with s2c                       (one write, first frame STATUS)
 //
 //	ss_x  = X25519(e, S_x)          ss_pq = ML-KEM-768 shared secret (CT to S_kem)
-//	salt  = SHA256(label || "salt" || server_id || E || CT)
+//	salt  = SHA256(Identifier || "salt" || server_id || E || CT)
 //	ek    = HKDF(ss_x || ss_pq, salt, "singlink early")
 //	ee    = X25519(f, E)
-//	tsalt = SHA256(label || "traffic" || salt || F || SHA256(sealed header))
+//	tsalt = SHA256(Identifier || "traffic" || salt || F || SHA256(sealed header))
 //	c2s, s2c = HKDF(ss_x || ss_pq || ee, tsalt, "singlink c2s" / "singlink s2c")
 //
 // Header plaintext:
@@ -107,7 +107,7 @@ func buildFirstFlight(spk *ServerPublicKey, device ed25519.PrivateKey, req *requ
 	}
 	sspq, ct := spk.kem.Encapsulate()
 	secret := append(append([]byte{}, ssx...), sspq...)
-	salt := hash([]byte(label), []byte("salt"), spk.id[:], E, ct)
+	salt := hash([]byte(Identifier), []byte("salt"), spk.id[:], E, ct)
 	ek, err := deriveKey(secret, salt, "singlink early")
 	if err != nil {
 		return nil, nil, err
@@ -153,7 +153,7 @@ func buildFirstFlight(spk *ServerPublicKey, device ed25519.PrivateKey, req *requ
 // trafficKeys derives the two directional keys once F is known.
 func trafficKeys(secret, ee, salt, F, hashH []byte) (c2s, s2c *cipherState, err error) {
 	full := append(append([]byte{}, secret...), ee...)
-	tsalt := hash([]byte(label), []byte("traffic"), salt, F, hashH)
+	tsalt := hash([]byte(Identifier), []byte("traffic"), salt, F, hashH)
 	kc, err := deriveKey(full, tsalt, "singlink c2s")
 	if err != nil {
 		return nil, nil, err
@@ -242,7 +242,7 @@ func parseFirstFlight(b []byte, keys []*ServerPrivateKey) (*serverHandshake, err
 			return nil, errProbe
 		}
 		secret := append(append([]byte{}, ssx...), sspq...)
-		salt := hash([]byte(label), []byte("salt"), key.pub.id[:], E, ct)
+		salt := hash([]byte(Identifier), []byte("salt"), key.pub.id[:], E, ct)
 		ek, err := deriveKey(secret, salt, "singlink early")
 		if err != nil {
 			return nil, err
