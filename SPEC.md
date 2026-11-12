@@ -1,4 +1,4 @@
-# SingLink Protocol Specification (SingLink/1)
+# SingLink Beta Protocol Specification
 
 Status: **Draft 3** (2026-11-12). Draft 3 binds the protocol identifier
 `IDENT` into the handshake (§4). Draft 2 added the fixes from an
@@ -6,6 +6,12 @@ internal security review; see [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
 **It has not yet had an independent third-party audit.**
 Wire version byte: `0x01`. Reference implementation: `singlink/` (Go,
 standard library only).
+
+The public protocol and project name is **SingLink Beta**. The legacy ASCII
+strings containing `SingLink/1` below are fixed cryptographic compatibility
+constants, not the public name. Implementations MUST retain their exact bytes
+to interoperate with existing peers; the naming update does not change the wire
+format or key derivation.
 
 The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -28,7 +34,7 @@ On top of that it adds:
 | Replay | n/a | timestamp window, ephemeral-key cache, restart rule |
 | Length obfuscation | Vision flow (optional) | random header padding and per-frame padding |
 
-Non-goals for SingLink/1:
+Non-goals for SingLink Beta:
 - Multiplexing several streams in one connection (use a mux layer above).
 - Making the inner bytes indistinguishable from random. The inner flight
   has structure: X25519 keys are curve points and ML-KEM ciphertexts are
@@ -254,7 +260,7 @@ It SHOULD tell the user to check the device clock and renew the link.
   `ee` as well, so it is forward secret against classical attackers.
 - **Post-quantum scope.** Against a future quantum attacker, recorded
   traffic is safe only while the node's static ML-KEM key stays secret.
-  SingLink/1 has **no post-quantum forward secrecy** (§11).
+  SingLink Beta has **no post-quantum forward secrecy** (§11).
 - **Client authentication.** Token signature plus device proof of
   possession over the whole header, bound to this handshake's `salt`. A
   token copied from one node is useless without the device key. Exception:
