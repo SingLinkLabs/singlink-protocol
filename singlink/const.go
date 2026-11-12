@@ -1,3 +1,6 @@
+// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// SPDX-License-Identifier: Apache-2.0
+
 // Package singlink implements the SingLink Protocol protocol (wire name "SingLink/1").
 //
 // SingLink is a stream proxy protocol in the VLESS / Trojan family: a client sends

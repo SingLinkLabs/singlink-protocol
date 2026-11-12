@@ -1,3 +1,6 @@
+// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// SPDX-License-Identifier: Apache-2.0
+
 // Package socks5 is the local proxy inbound that forwards everything through
 // a SingLink client. One port speaks both SOCKS5 (CONNECT, UDP ASSOCIATE,
 // optional RFC 1929 auth) and HTTP proxy (CONNECT and plain absolute-URI

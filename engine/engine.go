@@ -1,3 +1,6 @@
+// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// SPDX-License-Identifier: Apache-2.0
+
 // Package engine runs an SingLink client behind a local SOCKS5 port. It is the
 // layer shared by the CLI and the C ABI used by mobile/desktop apps.
 package engine
