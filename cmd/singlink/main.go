@@ -1,7 +1,7 @@
 // Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
 // SPDX-License-Identifier: Apache-2.0
 
-// Command singlink is the SingLink Protocol reference node, client and key tool.
+// Command singlink is the SingLink Beta Protocol reference node, client and key tool.
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 	"github.com/SingLinkLabs/singlink-protocol/singlink"
 )
 
-const usage = `singlink — SingLink Protocol protocol tool (` + singlink.Version + `)
+const usage = `singlink — SingLink Beta protocol tool (` + singlink.Version + `)
 
 Usage:
   singlink keygen server|issuer|device      generate a key pair (JSON)
