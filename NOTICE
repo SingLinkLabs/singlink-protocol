@@ -1,4 +1,4 @@
-SingLink Protocol, first generation (SingLink/1)
+SingLink Beta Protocol, first generation
 Copyright 2026 SingLinkLabs
 https://github.com/SingLinkLabs/singlink-protocol
 
@@ -17,7 +17,7 @@ work or of any work derived from it, in source or binary form. You must:
      third-party notices (for example an "About" or "Open-source licenses"
      screen):
 
-     Based on the SingLink Protocol by SingLinkLabs
+     Based on the SingLink Beta Protocol by SingLinkLabs
      https://github.com/SingLinkLabs/singlink-protocol
 
 Trademarks
@@ -26,6 +26,6 @@ Trademarks
 trademarks of SingLinkLabs. The license does not grant permission to use these
 names or marks, except as required to describe the origin of the work (Apache
 License 2.0, section 6). A modified version must not be called "SingLink" or
-presented as an official SingLinkLabs product. The wire name "SingLink/1" in
-the protocol identifies compatibility with this specification; it does not
-grant use of the trademarks.
+presented as an official SingLinkLabs product. The fixed compatibility
+constants in SPEC.md identify protocol interoperability; they do not grant
+use of the trademarks.

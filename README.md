@@ -1,11 +1,11 @@
-# SingLink Protocol
+# SingLink Beta Protocol
 
 **[繁體中文說明 →](README.zh-Hant.md)**
 
 ## Key facts
 
-- **What:** SingLink Protocol, first generation (wire name `SingLink/1`), an
-  open proxy/VPN protocol by SingLinkLabs, written in Go using only the
+- **What:** SingLink Beta Protocol, the open first-generation
+  proxy/VPN protocol by SingLinkLabs, written in Go using only the
   standard library.
 - **License:** Apache-2.0. "SingLink", "SingLinkVPN", 星連/星连 and the logo
   are trademarks of SingLinkLabs (see [NOTICE](NOTICE)).
@@ -29,7 +29,7 @@
 ## Background
 
 The SingLink protocol has evolved from SingLinkVPN's early versions and SingLink Beta to
-today's SingLink 2.0. The open-source "SingLink Protocol, first generation" and
+today's SingLink 2.0. The open-source "SingLink Beta Protocol, first generation" and
 "SingLinkVPN first-generation client" carry forward SingLinkVPN's
 long-standing design principles (account-based permissions, device binding
 and security by design) and were released after a security audit. The
@@ -39,8 +39,8 @@ poses no security risk, and the open-source plan will continue.
 
 ## Overview
 
-SingLink/1 is the first-generation version of the SingLink protocol, an open
-proxy/VPN protocol from SingLinkLabs. It keeps what makes
+SingLink Beta is the open first-generation proxy/VPN protocol from
+SingLinkLabs. It keeps what makes
 VLESS and Trojan fast: one request at the start of a TLS connection, with the
 first payload in the same flight and no extra round trip. On top of that it
 adds what a production VPN service needs.
@@ -82,7 +82,7 @@ and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
 
 | Path | What |
 |---|---|
-| `SPEC.md` | Protocol specification (SingLink/1) |
+| `SPEC.md` | SingLink Beta protocol specification |
 | `singlink/` | Protocol library (Go, standard library only) |
 | `socks5/` | Local SOCKS5 inbound (CONNECT + UDP ASSOCIATE, optional auth) |
 | `engine/` | Client runtime shared by the CLI and the C ABI |
@@ -136,6 +136,6 @@ Please report security issues privately, not in public issues. See
 
 Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 Redistributions and derivative works must keep the copyright headers and the
-NOTICE attribution ("Based on the SingLink Protocol by SingLinkLabs"). "SingLink"
+NOTICE attribution ("Based on the SingLink Beta Protocol by SingLinkLabs"). "SingLink"
 and "SingLinkVPN" are trademarks of SingLinkLabs: a modified version must use its
 own name.
