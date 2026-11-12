@@ -96,5 +96,8 @@ Please report security issues privately, not in public issues. See
 
 ## License
 
-Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). "SingLink" is a
-trademark of SingLinkLabs.
+Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Redistributions and derivative works must keep the copyright headers and the
+NOTICE attribution ("Based on the SingLink Protocol by SingLinkLabs"). "SingLink"
+and "SingLinkVPN" are trademarks of SingLinkLabs: a modified version must use its
+own name.

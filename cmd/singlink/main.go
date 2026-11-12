@@ -1,3 +1,6 @@
+// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// SPDX-License-Identifier: Apache-2.0
+
 // Command singlink is the SingLink Protocol reference node, client and key tool.
 package main
 
@@ -64,6 +67,7 @@ func main() {
 		err = demo(args)
 	case "version", "-v", "--version":
 		fmt.Println(singlink.Version, singlink.ProtocolName)
+		fmt.Println("Copyright 2026 SingLinkLabs · Apache-2.0 · https://github.com/SingLinkLabs/singlink-protocol")
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

@@ -1,3 +1,6 @@
+// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// SPDX-License-Identifier: Apache-2.0
+
 // Command ffi builds libsinglink, the C ABI used by the Flutter client:
 //
 //	go build -buildmode=c-shared -o build/libsinglink.dylib ./ffi

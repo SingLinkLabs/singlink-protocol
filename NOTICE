@@ -1,7 +1,31 @@
 SingLink Protocol
 Copyright 2026 SingLinkLabs
+https://github.com/SingLinkLabs/singlink-protocol
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
-"SingLink" and "SingLinkVPN" are trademarks of SingLinkLabs. The license does
-not grant permission to use these names, except as required to describe the
-origin of the work (Apache License 2.0, section 6).
+
+Attribution
+-----------
+Section 4 of the Apache License 2.0 applies to every redistribution of this
+work or of any work derived from it, in source or binary form. You must:
+
+  1. keep the copyright and license headers at the top of each source file;
+  2. include a copy of the LICENSE file;
+  3. mark the files you changed; and
+  4. include this NOTICE file, or reproduce its attribution text, in your
+     NOTICE file, in your documentation, or where your product shows
+     third-party notices (for example an "About" or "Open-source licenses"
+     screen):
+
+     Based on the SingLink Protocol by SingLinkLabs
+     https://github.com/SingLinkLabs/singlink-protocol
+
+Trademarks
+----------
+"SingLink", "SingLinkVPN", their Chinese names (星連, 星连) and the logo are
+trademarks of SingLinkLabs. The license does not grant permission to use these
+names or marks, except as required to describe the origin of the work (Apache
+License 2.0, section 6). A modified version must not be called "SingLink" or
+presented as an official SingLinkLabs product. The wire name "SingLink/1" in
+the protocol identifies compatibility with this specification; it does not
+grant use of the trademarks.

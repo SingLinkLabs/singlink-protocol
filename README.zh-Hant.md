@@ -51,3 +51,7 @@ VPN App（Flutter）放在另一個獨立倉庫。
    - 每台節點用自己的金鑰，並定期輪替（`old_private_keys` 可讓新舊金鑰並存一段時間）。
 4. **偽裝網站：** 節點網域放一個真實網站，`fallback` 指向它，並開啟 `fallback_proxy_protocol`，憑證用正式 CA 簽發。
 5. **系統服務：** 用 `deploy/singlink.service` 部署，已包含系統沙盒、私鑰保護和崩潰自動重啟。
+
+## 授權與署名
+
+採用 Apache License 2.0（見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)）。任何人轉發本專案或以它為基礎修改，都必須保留每個原始檔開頭的版權標示和 NOTICE 裡的署名「Based on the SingLink Protocol by SingLinkLabs」，並標明改過哪些檔案。「SingLink」「SingLinkVPN」「星連」「星连」名稱與圖示是 SingLinkLabs 的商標，修改版必須使用自己的名稱。
