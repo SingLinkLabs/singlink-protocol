@@ -419,7 +419,7 @@ func demo(args []string) error {
 	if err != nil {
 		return err
 	}
-	p := &singlink.Profile{Name: "SingLink 本機示範節點", Server: ln.Addr().String(), Transport: "tls", SNI: "singlink-demo.local",
+	p := &singlink.Profile{Name: "SingLink local demo node", Server: ln.Addr().String(), Transport: "tls", SNI: "singlink-demo.local",
 		Pin: pin, ServerKey: key.Public(), Token: raw, Device: device}
 	fmt.Println("node:", ln.Addr().String(), "(TLS 1.3, pinned self-signed certificate)")
 	fmt.Println("link:")
