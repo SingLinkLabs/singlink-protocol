@@ -1,4 +1,4 @@
-# Security review: SingLink Protocol, draft 1 → draft 2
+# Security review: SingLink Beta Protocol, draft 1 → draft 2
 
 Date: 2026-11-12. Scope: this repository (protocol design, `SPEC.md`, the Go
 implementation, CLI, C ABI, deploy files) as of commit `3eb3fd3`.
