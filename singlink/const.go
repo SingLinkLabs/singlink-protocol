@@ -33,6 +33,15 @@ const (
 	Version = "1.0.0-draft"
 	// ProtocolName is the wire protocol identifier.
 	ProtocolName = "SingLink/1"
+	// Attribution must be kept by redistributions and derivative works
+	// (see NOTICE, Apache License 2.0 section 4(d)).
+	Attribution = "SingLink Protocol by SingLinkLabs · https://github.com/SingLinkLabs/singlink-protocol"
+
+	// Identifier is mixed into every handshake key derivation, the way
+	// WireGuard binds its author's identifier into its handshake. An
+	// implementation that drops or changes it cannot interoperate with
+	// SingLink/1 peers.
+	Identifier = "SingLink/1 by SingLinkLabs (singlinkvpn.com)"
 
 	wireVersion = 1
 	label       = "SingLink/1"

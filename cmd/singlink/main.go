@@ -67,7 +67,8 @@ func main() {
 		err = demo(args)
 	case "version", "-v", "--version":
 		fmt.Println(singlink.Version, singlink.ProtocolName)
-		fmt.Println("Copyright 2026 SingLinkLabs · Apache-2.0 · https://github.com/SingLinkLabs/singlink-protocol")
+		fmt.Println(singlink.Attribution)
+		fmt.Println("Copyright 2026 SingLinkLabs · Apache-2.0")
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

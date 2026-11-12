@@ -20,7 +20,7 @@ SingLink 協議是 SingLinkLabs 開源的代理／VPN 協議。
 
 ## 狀態
 
-**版本：1.0.0-draft（規格第 2 版草案）**
+**版本：1.0.0-draft（規格第 3 版草案）**
 
 - 只用 Go 標準庫的成熟加密元件，沒有第三方套件，也沒有自創加密演算法。
 - 已完成**內部安全審計**，共找到 31 個問題，「高」和「中」等級全部修好或緩解，詳見 [docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)。

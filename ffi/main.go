@@ -48,7 +48,7 @@ func guard(res **C.char) {
 //export SingLinkVersion
 func SingLinkVersion() (res *C.char) {
 	defer guard(&res)
-	return out(map[string]string{"version": singlink.Version, "protocol": singlink.ProtocolName})
+	return out(map[string]string{"version": singlink.Version, "protocol": singlink.ProtocolName, "attribution": singlink.Attribution})
 }
 
 //export SingLinkParseLink
