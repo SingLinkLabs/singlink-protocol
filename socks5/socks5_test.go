@@ -1,10 +1,15 @@
 package socks5
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -188,5 +193,70 @@ func TestAuth(t *testing.T) {
 	}
 	if !try([]byte{0, 2}, "u", "p") {
 		t.Fatal("correct password refused")
+	}
+}
+
+// The same port speaks HTTP proxy (CONNECT and plain requests).
+func TestHTTPProxy(t *testing.T) {
+	s, addr := newTestServer(t)
+	defer s.Close()
+
+	// CONNECT to a TCP echo server.
+	echo, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer echo.Close()
+	go func() {
+		for {
+			e, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer e.Close(); io.Copy(e, e) }()
+		}
+	}()
+	c, _ := net.Dial("tcp", addr)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", echo.Addr(), echo.Addr())
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v %v", resp, err)
+	}
+	c.Write([]byte("tunnel"))
+	got := make([]byte, 6)
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != "tunnel" {
+		t.Fatalf("CONNECT echo %q %v", got, err)
+	}
+
+	// Plain HTTP with an absolute URI.
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Proxy-Connection") != "" || r.RequestURI != "/hello?x=1" {
+			http.Error(w, "proxy headers leaked or bad URI "+r.RequestURI, 500)
+			return
+		}
+		io.WriteString(w, "world")
+	}))
+	defer web.Close()
+	pu, _ := url.Parse("http://" + addr)
+	hc := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}, Timeout: 10 * time.Second}
+	r, err := hc.Get(web.URL + "/hello?x=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if r.StatusCode != 200 || string(body) != "world" {
+		t.Fatalf("plain HTTP: %d %q", r.StatusCode, body)
+	}
+
+	// With credentials configured, HTTP clients must authenticate.
+	s.Username, s.Password = "u", "p"
+	if r, err := hc.Get(web.URL + "/hello?x=1"); err != nil || r.StatusCode != 407 {
+		t.Fatalf("want 407, got %v %v", r, err)
+	}
+	pu.User = url.UserPassword("u", "p")
+	hc2 := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}, Timeout: 10 * time.Second}
+	if r, err := hc2.Get(web.URL + "/hello?x=1"); err != nil || r.StatusCode != 200 {
+		t.Fatalf("authenticated request: %v %v", r, err)
 	}
 }
