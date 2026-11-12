@@ -205,13 +205,13 @@ func TestKeysAndTokenRoundTrip(t *testing.T) {
 
 func TestLinkRoundTrip(t *testing.T) {
 	e := newEnv(t, envOpt{tls: true})
-	e.profile.Name = "香港 01"
+	e.profile.Name = "Hong Kong 01 🇭🇰"
 	link := e.profile.Link()
 	p, err := ParseLink(link)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name != "香港 01" || p.Server != e.profile.Server || p.Transport != "tls" || p.SNI != "localhost" ||
+	if p.Name != "Hong Kong 01 🇭🇰" || p.Server != e.profile.Server || p.Transport != "tls" || p.SNI != "localhost" ||
 		!bytes.Equal(p.Pin, e.profile.Pin) || !bytes.Equal(p.Token, e.profile.Token) ||
 		!bytes.Equal(p.Device, e.profile.Device) || !bytes.Equal(p.ServerKey.Bytes(), e.profile.ServerKey.Bytes()) {
 		t.Fatal("link round trip mismatch")
