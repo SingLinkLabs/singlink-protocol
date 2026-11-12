@@ -2,7 +2,8 @@
 
 **[繁體中文說明 →](README.zh-Hant.md)**
 
-SingLink is an open proxy/VPN protocol from SingLinkLabs. It keeps what makes
+SingLink/1 is the first-generation version of the SingLink protocol, an open
+proxy/VPN protocol from SingLinkLabs. It keeps what makes
 VLESS and Trojan fast: one request at the start of a TLS connection, with the
 first payload in the same flight and no extra round trip. On top of that it
 adds what a production VPN service needs.
@@ -36,9 +37,17 @@ and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
 
 > **Status: 1.0.0-draft (spec draft 3).** The protocol uses only standard
 > primitives from the Go standard library. It has been through an internal
-> security review, with a regression test for every finding plus fuzzing, but
-> **not yet a third-party audit**. Don't rely on it for high-risk use until it
-> has had one.
+> security review, with a regression test for every finding plus fuzzing.
+> **A third-party audit is planned**; until it is complete, evaluate the
+> protocol carefully before high-risk use.
+
+SingLinkLabs released its first-generation protocol and client code after a
+security audit. The latest versions (the SingLink 2.0 core and the current
+SingLinkVPN apps) are not yet fully public for security reasons, so only code
+that poses no security risk was released. The open-source plan continues, and
+more will be released in later phases after security review. The
+first-generation SingLinkVPN client built on this protocol is at
+[SingLinkLabs/singlink-vpn-app](https://github.com/SingLinkLabs/singlink-vpn-app).
 
 ## Layout
 
