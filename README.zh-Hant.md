@@ -1,6 +1,6 @@
 # SingLink 協議
 
-SingLink 協議是 SingLinkLabs 開源的代理／VPN 協議。
+SingLink 協議（SingLink/1）是 SingLinkLabs 第一代 SingLink 協議，以開源形式發布的代理／VPN 協議。
 
 它保留了 VLESS、Trojan 速度快的優點：TLS 連線一開始只送一次請求，第一段資料跟請求一起送出，不必多等一個來回。在這個基礎上，它補齊了正式營運 VPN 服務需要的能力。
 
@@ -25,7 +25,9 @@ SingLink 協議是 SingLinkLabs 開源的代理／VPN 協議。
 - 只用 Go 標準庫的成熟加密元件，沒有第三方套件，也沒有自創加密演算法。
 - 已完成**內部安全審計**，共找到 31 個問題，「高」和「中」等級全部修好或緩解，詳見 [docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)。
 - 每個修正都有對應的回歸測試，所有解析器都做過模糊測試。
-- **尚未經過第三方審計公司的正式審計。**
+- **已規劃由第三方審計公司進行正式審計**；在審計完成前，用於高風險場景請先審慎評估。
+
+SingLinkLabs 在完成安全審計後，公開了第一代協議與用戶端程式碼。基於安全考量，最新版本（SingLink 2.0 核心與現行星連VPN App）暫未完全公開，因此這次只發布不構成安全風險的程式碼。開源計劃會持續推進，後續階段將在完成安全審查後陸續公開更多內容。以這個協議開發的第一代星連VPN用戶端位於 [SingLinkLabs/singlink-vpn-app](https://github.com/SingLinkLabs/singlink-vpn-app)。
 
 ## 目錄
 
