@@ -15,7 +15,7 @@
   fixed or mitigated ([docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md));
   third-party audit planned.
 - **Lineage:** the SingLink protocol has evolved from SingLinkVPN's early
-  versions to today's SingLink 2.0; this first generation carries forward
+  versions and SingLink Beta to today's SingLink 2.0; this first generation carries forward
   SingLinkVPN's design principles of account-based permissions, device
   binding and security by design.
 - **Stays closed for now:** the latest versions (the SingLink 2.0 core and
@@ -28,8 +28,8 @@
 
 ## Background
 
-The SingLink protocol has evolved from SingLinkVPN's early versions to today's
-SingLink 2.0. The open-source "SingLink Protocol, first generation" and
+The SingLink protocol has evolved from SingLinkVPN's early versions and SingLink Beta to
+today's SingLink 2.0. The open-source "SingLink Protocol, first generation" and
 "SingLinkVPN first-generation client" carry forward SingLinkVPN's
 long-standing design principles (account-based permissions, device binding
 and security by design) and were released after a security audit. The
