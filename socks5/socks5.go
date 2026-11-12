@@ -1,17 +1,24 @@
-// Package socks5 is a minimal local SOCKS5 inbound (CONNECT and UDP
-// ASSOCIATE, no authentication) that forwards everything through an SingLink
-// client. It is meant to listen on loopback only.
+// Package socks5 is the local proxy inbound that forwards everything through
+// a SingLink client. One port speaks both SOCKS5 (CONNECT, UDP ASSOCIATE,
+// optional RFC 1929 auth) and HTTP proxy (CONNECT and plain absolute-URI
+// requests), chosen by the first byte, because some system proxy settings
+// only speak HTTP (Windows WinINet) or SOCKS v4. It is meant to listen on
+// loopback only.
 package socks5
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,8 +157,34 @@ const (
 	repCmdNotSupp  = 7
 )
 
-func (s *Server) handle(c net.Conn) {
-	c.SetDeadline(time.Now().Add(15 * time.Second))
+// bufConn is a connection whose reads go through a bufio.Reader that has
+// already peeked at the first bytes.
+type bufConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
+func (b *bufConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return b.Conn.Close()
+}
+
+func (s *Server) handle(raw net.Conn) {
+	raw.SetDeadline(time.Now().Add(15 * time.Second))
+	br := bufio.NewReader(raw)
+	first, err := br.Peek(1)
+	if err != nil {
+		return
+	}
+	c := &bufConn{Conn: raw, r: br}
+	if first[0] != 5 {
+		s.handleHTTP(c)
+		return
+	}
 	var h [2]byte
 	if _, err := io.ReadFull(c, h[:]); err != nil || h[0] != 5 {
 		return
@@ -221,6 +254,81 @@ func (s *Server) checkAuth(c net.Conn) bool {
 	}
 	c.Write([]byte{1, 0})
 	return true
+}
+
+// handleHTTP serves one HTTP proxy request: CONNECT tunnels, or a plain
+// request with an absolute URI forwarded with "Connection: close".
+func (s *Server) handleHTTP(c *bufConn) {
+	req, err := http.ReadRequest(c.r)
+	if err != nil {
+		return
+	}
+	if s.Username != "" && !s.httpAuthOK(req) {
+		io.WriteString(c, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"SingLink\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		return
+	}
+	host := req.Host
+	if req.Method != http.MethodConnect {
+		host = req.URL.Host
+		if req.URL.Scheme != "http" || host == "" {
+			io.WriteString(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+			return
+		}
+	}
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		port := "80"
+		if req.Method == http.MethodConnect {
+			port = "443"
+		}
+		host = net.JoinHostPort(strings.Trim(host, "[]"), port)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	up, err := s.Client.DialTCP(ctx, host)
+	cancel()
+	if err != nil {
+		io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		return
+	}
+	defer up.Close()
+	if !s.track(up) {
+		return
+	}
+	defer s.untrack(up)
+	s.Client.Stats.Conns.Add(1)
+	defer s.Client.Stats.Conns.Add(-1)
+	c.SetDeadline(time.Time{})
+	if req.Method == http.MethodConnect {
+		// Answer at once so the client's TLS ClientHello rides in the
+		// SingLink 0-RTT first flight.
+		if _, err := io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
+			return
+		}
+		pipe(c, up)
+		return
+	}
+	req.Header.Del("Proxy-Connection")
+	req.Header.Del("Proxy-Authorization")
+	req.Header.Set("Connection", "close")
+	req.Close = true
+	req.RequestURI = ""
+	if err := req.Write(up); err != nil {
+		return
+	}
+	pipe(c, up)
+}
+
+func (s *Server) httpAuthOK(req *http.Request) bool {
+	v := req.Header.Get("Proxy-Authorization")
+	enc, ok := strings.CutPrefix(v, "Basic ")
+	if !ok {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return false
+	}
+	user, pass, _ := strings.Cut(string(b), ":")
+	return subtle.ConstantTimeCompare([]byte(user), []byte(s.Username))&subtle.ConstantTimeCompare([]byte(pass), []byte(s.Password)) == 1
 }
 
 func (s *Server) connect(c net.Conn, dst string) {
