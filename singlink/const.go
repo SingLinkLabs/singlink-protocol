@@ -1,7 +1,7 @@
 // Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package singlink implements the SingLink Protocol protocol (wire name "SingLink/1").
+// Package singlink implements the SingLink Beta protocol.
 //
 // SingLink is a stream proxy protocol in the VLESS / Trojan family: a client sends
 // one request at the start of a TLS (or raw TCP) connection and the server
@@ -31,16 +31,16 @@ import (
 const (
 	// Version is the implementation version.
 	Version = "1.0.0-draft"
-	// ProtocolName is the wire protocol identifier.
-	ProtocolName = "SingLink/1"
+	// ProtocolName is the public protocol name used by the CLI and app metadata.
+	ProtocolName = "SingLink Beta"
 	// Attribution must be kept by redistributions and derivative works
 	// (see NOTICE, Apache License 2.0 section 4(d)).
-	Attribution = "SingLink Protocol by SingLinkLabs · https://github.com/SingLinkLabs/singlink-protocol"
+	Attribution = "Based on the SingLink Beta Protocol by SingLinkLabs · https://github.com/SingLinkLabs/singlink-protocol"
 
 	// Identifier is mixed into every handshake key derivation, the way
 	// WireGuard binds its author's identifier into its handshake. An
 	// implementation that drops or changes it cannot interoperate with
-	// SingLink/1 peers.
+	// SingLink Beta peers. These legacy bytes are retained for compatibility.
 	Identifier = "SingLink/1 by SingLinkLabs (singlinkvpn.com)"
 
 	wireVersion = 1
