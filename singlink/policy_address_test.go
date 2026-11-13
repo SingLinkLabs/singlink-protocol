@@ -4,6 +4,8 @@ package singlink
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -37,4 +39,21 @@ func TestNAT64EquivalentPolicies(t *testing.T) {
 		}
 	}
 	// No DNS/dial/translator is used in this policy-level regression.
+}
+
+func TestNAT64CachedPolicyIsRechecked(t *testing.T) {
+	translated := netip.MustParseAddr("64:ff9b::808:808")
+	mockDNS := &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("synthetic DNS unavailable")
+	}}
+	rs := &resolver{deny: []netip.Prefix{netip.MustParsePrefix("8.8.8.8/32")}, r: mockDNS, cache: map[string]cachedIP{"blocked.invalid": {ip: translated, exp: time.Now().Add(time.Minute)}}}
+	if _, status := rs.resolve(context.Background(), Addr{Host: "blocked.invalid", Port: 443}); status == StatusOK {
+		t.Fatal("cached equivalent bypassed deny")
+	}
+	// Positive cache path preserves the original translated address without DNS.
+	allowed := netip.MustParseAddr("64:ff9b::808:404")
+	rs.cache["allowed.invalid"] = cachedIP{ip: allowed, exp: time.Now().Add(time.Minute)}
+	if address, status := rs.resolve(context.Background(), Addr{Host: "allowed.invalid", Port: 443}); status != StatusOK || address.Addr() != allowed {
+		t.Fatal("allowed cached control changed")
+	}
 }
