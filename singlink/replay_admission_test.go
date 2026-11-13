@@ -55,7 +55,7 @@ func TestFutureFlightRejectedAcrossRestart(t *testing.T) {
 	if err != nil || len(snapshot.entries) != 1 {
 		t.Fatal("admission did not persist mark")
 	}
-	expected := time.Unix(stamp.Unix(), 0).Add(e.srv.cfg.MaxTimeSkew + time.Second).UnixNano()
+	expected := time.Unix(stamp.Unix(), 0).Add(maxSupportedTimeSkew + time.Second).UnixNano()
 	for _, expiry := range snapshot.entries {
 		if expiry != expected {
 			t.Fatal("future flight expiry did not cover its full accepted window")

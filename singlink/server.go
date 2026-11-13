@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+// Every supported instance uses this common replay-retention ceiling, even
+// when it chooses a smaller acceptance window. Shared-key instances cannot
+// shorten one another's replay protection by selecting different windows.
+const maxSupportedTimeSkew = 120 * time.Second
+
 // ServerConfig configures a node.
 type ServerConfig struct {
 	Key *ServerPrivateKey
@@ -61,7 +66,7 @@ type ServerConfig struct {
 	MaxConnections  int // default 20000; accept waits when reached
 	MaxPendingPerIP int // default 64 concurrent unauthenticated handshakes per IP
 
-	MaxTimeSkew      time.Duration // default 120s
+	MaxTimeSkew      time.Duration // default and maximum 120s
 	HandshakeTimeout time.Duration // default 10s: wait for the first bytes
 	FlightIdle       time.Duration // default 500ms: raw TCP only, end of first flight
 	// ExpiredGrace is how long after expiry a token still gets an explicit
@@ -133,9 +138,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, errors.New("singlink: at least one token issuer required")
 	}
 	if cfg.MaxTimeSkew == 0 {
-		cfg.MaxTimeSkew = 120 * time.Second
+		cfg.MaxTimeSkew = maxSupportedTimeSkew
 	}
-	if cfg.MaxTimeSkew < 0 || cfg.MaxTimeSkew > time.Hour {
+	if cfg.MaxTimeSkew < 0 || cfg.MaxTimeSkew > maxSupportedTimeSkew {
 		return nil, errors.New("singlink: invalid timestamp window")
 	}
 	if cfg.ReplayStore == nil {
@@ -314,7 +319,7 @@ func (s *Server) handle(raw net.Conn) {
 	// Mark before any destination operation. Store acknowledgement is durable.
 	markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
 	tag := sha256.Sum256(append(append([]byte{}, hs.replayDomain[:]...), hs.E...))
-	fresh, storeErr := s.replay.CheckAndMark(markCtx, tag, hs.req.ts.Add(s.cfg.MaxTimeSkew+time.Second))
+	fresh, storeErr := s.replay.CheckAndMark(markCtx, tag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
 	markTimedOut := markCtx.Err() != nil
 	markCancel()
 	if storeErr != nil || !fresh || markTimedOut {

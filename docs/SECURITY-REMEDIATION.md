@@ -71,8 +71,13 @@ payload, account/subject identifier, raw token, device seed, or node private key
 These are short-lived **security state**, not a promise of retaining no data.
 Assess retention, access controls and the product's privacy definitions explicitly.
 
-Marks cover the full accepted request timestamp window with a conservative
-one-second rounding margin. Expired marks are garbage-collected on subsequent
+Every instance supports a timestamp skew of at most 120 seconds (the original
+default); larger `MaxTimeSkew` settings refuse startup. An instance may choose a
+smaller acceptance window, but all instances retain tags until the request
+timestamp plus the common 120-second ceiling and a conservative one-second
+rounding margin. A short-window instance therefore cannot expire a mark while
+a longer supported instance would still accept that same flight. This is logical
+expiry, not a promise of physical erasure within four minutes. Expired marks are garbage-collected on subsequent
 successful admissions; idle/offline snapshots retain them until such maintenance.
 Abandoned temporary snapshots for the same state file are removed on the next
 successful write. The durable global clock watermark is preserved through GC;
