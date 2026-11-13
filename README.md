@@ -139,3 +139,12 @@ Redistributions and derivative works must keep the copyright headers and the
 NOTICE attribution ("Based on the SingLink Beta Protocol by SingLinkLabs"). "SingLink"
 and "SingLinkVPN" are trademarks of SingLinkLabs: a modified version must use its
 own name.
+
+## Required security-state migration
+
+The server now requires explicitly initialized durable replay state; there is no
+memory-only fallback. Existing node configurations must add `replay_file` and
+provision its private state once for fresh keys before startup. Never reset state
+while its keys remain accepted. See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
+for same-host sharing, unsupported multi-host file storage, Windows server-backend
+limits, clock/GC behavior and the explicit `empty` revocation-list format.

@@ -41,7 +41,7 @@ func TestRevocation(t *testing.T) {
 	expectRejected(t, dial(t, e, echoServer(t, "")))
 
 	// Revoking a subject closes its live sessions on the next reload.
-	os.WriteFile(rf, nil, 0o600)
+	os.WriteFile(rf, []byte("empty\n"), 0o600)
 	tok2 := &Token{Subject: [16]byte{0x7}, Caps: CapTCP, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
 	e = newEnv(t, envOpt{tok: tok2, mutate: func(c *ServerConfig) { c.RevokedFile = rf }})
 	c := dial(t, e, echoServer(t, ""))
@@ -70,7 +70,7 @@ func TestReplayAcrossRestart(t *testing.T) {
 	}
 	time.Sleep(1100 * time.Millisecond)
 	// A new process with the same key must not accept a flight made before it started.
-	srv2, _ := NewServer(ServerConfig{Key: e.key, Issuers: e.srv.cfg.Issuers, AllowPrivate: true, Fallback: site})
+	srv2, _ := NewServer(ServerConfig{ReplayStore: e.srv.cfg.ReplayStore, Key: e.key, Issuers: e.srv.cfg.Issuers, AllowPrivate: true, Fallback: site})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

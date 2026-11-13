@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,7 @@ Usage:
   singlink token issue [flags]              sign a permission token
   singlink token inspect <token>            decode a token
   singlink link [flags]                     build an singlink:// client link
+  singlink replay-init -path state/replay.db  initialize state for NEW keys only
   singlink server -c server.json            run a node
   singlink client -link <singlink://...> [-listen 127.0.0.1:1080]
   singlink demo [-listen 127.0.0.1:1080]    local node + client in one process
@@ -59,6 +61,8 @@ func main() {
 		err = token(args)
 	case "link":
 		err = link(args)
+	case "replay-init":
+		err = replayInit(args)
 	case "server":
 		err = server(args)
 	case "client":
@@ -262,6 +266,8 @@ func link(args []string) error {
 }
 
 type serverFile struct {
+	ReplayFile            string   `json:"replay_file"`
+	ReplayMaxEntries      int      `json:"replay_max_entries"`
 	Listen                string   `json:"listen"`
 	PrivateKey            string   `json:"private_key"`
 	OldPrivateKeys        []string `json:"old_private_keys"`
@@ -285,6 +291,20 @@ func parseServerKey(s string) (*singlink.ServerPrivateKey, error) {
 		return nil, errors.New("bad private key encoding")
 	}
 	return singlink.ParseServerPrivateKey(kb)
+}
+
+func replayInit(args []string) error {
+	fs := flag.NewFlagSet("replay-init", flag.ContinueOnError)
+	path := fs.String("path", "", "NEW replay state path (never reset while its keys are accepted)")
+	capacity := fs.Int("max-entries", 0, "bounded replay capacity (0 = 65536)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *path == "" {
+		return errors.New("-path is required")
+	}
+	_, err := singlink.InitializeReplayFile(*path, *capacity)
+	return err
 }
 
 func server(args []string) error {
@@ -332,7 +352,7 @@ func server(args []string) error {
 		lvl = slog.LevelDebug
 	}
 	cfg := singlink.ServerConfig{
-		Key: key, OldKeys: old, Issuers: singlink.NewIssuers(pubs...),
+		ReplayFile: f.ReplayFile, ReplayMaxEntries: f.ReplayMaxEntries, Key: key, OldKeys: old, Issuers: singlink.NewIssuers(pubs...),
 		Fallback: f.Fallback, FallbackProxyProtocol: f.FallbackProxyProtocol,
 		AllowPrivate: f.AllowPrivate, DenyCIDRs: deny, BlockedPorts: f.BlockedPorts, AllowSMTP: f.AllowSMTP,
 		MaxConnections: f.MaxConnections, RevokedFile: f.RevokedFile,
@@ -404,8 +424,17 @@ func demo(args []string) error {
 	if err != nil {
 		return err
 	}
+	replayDir, err := os.MkdirTemp("", "singlink-demo-replay-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(replayDir)
+	replay, err := singlink.InitializeReplayFile(filepath.Join(replayDir, "replay.db"), 0)
+	if err != nil {
+		return err
+	}
 	srv, err := singlink.NewServer(singlink.ServerConfig{
-		Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)),
+		ReplayStore: replay, Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)),
 		TLS: &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: ck}}},
 	})
 	if err != nil {

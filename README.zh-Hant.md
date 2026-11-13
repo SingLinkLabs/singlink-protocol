@@ -73,3 +73,10 @@ VPN App（Flutter）放在另一個獨立倉庫。
 ## 授權與署名
 
 採用 Apache License 2.0（見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)）。任何人轉發本專案或以它為基礎修改，都必須保留每個原始檔開頭的版權標示和 NOTICE 裡的署名「Based on the SingLink Beta Protocol by SingLinkLabs」，並標明改過哪些檔案。「SingLink」「SingLinkVPN」「星連」「星连」名稱與圖示是 SingLinkLabs 的商標，修改版必須使用自己的名稱。
+
+## 必要的安全狀態遷移
+
+服務端現在要求明確初始化的持久防重放狀態，沒有記憶體回退模式。舊節點設定需新增
+`replay_file`，並在新 key 首次啟動前配置私有狀態；key 仍被接受時不得清空或還原舊狀態。
+同主機共享、跨主機外接 store、Windows 服務端 backend 限制、clock/GC 行為及撤銷列表
+明確 `empty` 格式，詳見[修復與部署契約](docs/SECURITY-REMEDIATION.md)。

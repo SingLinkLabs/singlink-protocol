@@ -209,13 +209,14 @@ func readFlight(c net.Conn, isTLS bool, first, idle time.Duration) ([]byte, erro
 
 // serverHandshake is the result of a successfully decrypted first flight.
 type serverHandshake struct {
-	req    request
-	sig    []byte
-	signed []byte // header bytes covered by sig
-	E      []byte
-	secret []byte
-	salt   []byte
-	hashH  []byte
+	replayDomain [32]byte
+	req          request
+	sig          []byte
+	signed       []byte // header bytes covered by sig
+	E            []byte
+	secret       []byte
+	salt         []byte
+	hashH        []byte
 }
 
 // parseFirstFlight decrypts a complete first flight with one of keys (the
@@ -264,7 +265,7 @@ func parseFirstFlight(b []byte, keys []*ServerPrivateKey) (*serverHandshake, err
 		if err != nil {
 			return nil, errProbe
 		}
-		hs := &serverHandshake{E: append([]byte{}, E...), secret: secret, salt: salt, hashH: hash(sealedLen, sealed)}
+		hs := &serverHandshake{replayDomain: key.pub.id, E: append([]byte{}, E...), secret: secret, salt: salt, hashH: hash(sealedLen, sealed)}
 		if err := hs.parseHeader(h); err != nil {
 			return nil, errProbe
 		}

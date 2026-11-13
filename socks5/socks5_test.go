@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestSOCKS5ConnectAndUDP(t *testing.T) {
 	key, _ := singlink.GenerateServerKey()
 	issuer, _ := singlink.GenerateEd25519()
 	device, _ := singlink.GenerateEd25519()
-	srv, err := singlink.NewServer(singlink.ServerConfig{Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)), AllowPrivate: true})
+	srv, err := singlink.NewServer(singlink.ServerConfig{ReplayStore: testReplayStore(t), Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)), AllowPrivate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	key, _ := singlink.GenerateServerKey()
 	issuer, _ := singlink.GenerateEd25519()
 	device, _ := singlink.GenerateEd25519()
-	srv, _ := singlink.NewServer(singlink.ServerConfig{Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)), AllowPrivate: true})
+	srv, _ := singlink.NewServer(singlink.ServerConfig{ReplayStore: testReplayStore(t), Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)), AllowPrivate: true})
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	t.Cleanup(func() { ln.Close() })
 	go srv.Serve(ln)
@@ -262,4 +263,13 @@ func TestHTTPProxy(t *testing.T) {
 	if r, err := hc2.Get(web.URL + "/hello?x=1"); err != nil || r.StatusCode != 200 {
 		t.Fatalf("authenticated request: %v %v", r, err)
 	}
+}
+
+func testReplayStore(t *testing.T) singlink.ReplayStore {
+	t.Helper()
+	s, err := singlink.InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

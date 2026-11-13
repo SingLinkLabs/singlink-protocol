@@ -35,15 +35,16 @@ type Status struct {
 
 // Engine is safe for concurrent use. The zero value is ready.
 type Engine struct {
-	mu       sync.Mutex
-	starting bool
-	client   *singlink.Client
-	stop     func() // stops the running transport (SOCKS5 port, TUN, ...)
-	listen   string
-	user     string
-	pass     string
-	since    time.Time
-	lastErr  string
+	mu         sync.Mutex
+	generation uint64
+	pending    *startAttempt
+	client     *singlink.Client
+	stop       func() // stops the running transport (SOCKS5 port, TUN, ...)
+	listen     string
+	user       string
+	pass       string
+	since      time.Time
+	lastErr    string
 }
 
 // Options tunes Start.
@@ -64,59 +65,48 @@ func (e *Engine) Start(link, listen string, opts ...Options) error {
 	if len(opts) > 0 {
 		o = opts[0]
 	}
-	if !e.begin() {
+	a := e.begin()
+	if a == nil {
 		return errors.New("already running")
 	}
-	c, s, addr, user, pass, err := start(link, listen, o)
+	c, s, addr, user, pass, err := start(a.ctx, link, listen, o)
 	var stop func()
 	if s != nil {
 		stop = func() { s.Close() }
 	}
-	return e.finish(c, stop, addr, user, pass, err)
+	return e.finish(a, c, stop, addr, user, pass, err)
 }
 
 // StartWith verifies the node in link like Start and then hands the client
 // to run, which starts some other transport (for example a TUN device) and
 // returns its stop function. Status, Probe and ExitIP then work as usual.
 func (e *Engine) StartWith(link, label string, run func(*singlink.Client) (stop func(), err error)) error {
-	if !e.begin() {
+	a := e.begin()
+	if a == nil {
 		return errors.New("already running")
+	}
+	if run == nil {
+		return e.finish(a, nil, nil, "", "", "", errors.New("transport callback required"))
 	}
 	p, err := singlink.ParseLink(link)
 	if err != nil {
-		return e.finish(nil, nil, "", "", "", err)
+		return e.finish(a, nil, nil, "", "", "", err)
 	}
 	c := singlink.NewClient(p)
-	if err := check(c); err != nil {
-		return e.finish(nil, nil, "", "", "", err)
+	if !e.attachClient(a, c) {
+		return e.finish(a, nil, nil, "", "", "", context.Canceled)
+	}
+	if err := checkContext(a.ctx, c); err != nil {
+		return e.finish(a, nil, nil, "", "", "", err)
+	}
+	if err := a.ctx.Err(); err != nil {
+		return e.finish(a, nil, nil, "", "", "", err)
 	}
 	stop, err := run(c)
-	return e.finish(c, stop, label, "", "", err)
+	return e.finish(a, c, stop, label, "", "", err)
 }
 
-func (e *Engine) begin() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.stop != nil || e.starting {
-		return false
-	}
-	e.starting = true
-	return true
-}
-
-func (e *Engine) finish(c *singlink.Client, stop func(), listen, user, pass string, err error) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.starting = false
-	if err != nil {
-		e.lastErr = err.Error()
-		return err
-	}
-	e.client, e.stop, e.listen, e.user, e.pass, e.since, e.lastErr = c, stop, listen, user, pass, time.Now(), ""
-	return nil
-}
-
-func start(link, listen string, o Options) (*singlink.Client, *socks5.Server, string, string, string, error) {
+func start(ctx context.Context, link, listen string, o Options) (*singlink.Client, *socks5.Server, string, string, string, error) {
 	if listen == "" {
 		listen = "127.0.0.1:1080"
 	}
@@ -129,12 +119,15 @@ func start(link, listen string, o Options) (*singlink.Client, *socks5.Server, st
 		return nil, nil, "", "", "", fmt.Errorf("listen address must be a loopback IP such as 127.0.0.1:1080, got %q", listen)
 	}
 	c := singlink.NewClient(p)
-	if err := check(c); err != nil {
+	if err := checkContext(ctx, c); err != nil {
 		return nil, nil, "", "", "", err
 	}
 	s := &socks5.Server{Client: c}
 	if o.Auth {
 		s.Username, s.Password = randomToken(), randomToken()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", "", "", err
 	}
 	addr, err := s.Start(listen)
 	if err != nil {
@@ -157,16 +150,22 @@ func (e *Engine) Credentials() (string, string) {
 }
 
 // check performs one authenticated handshake to a well-known destination.
-func check(c *singlink.Client) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+func checkContext(parent context.Context, c *singlink.Client) error {
+	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
 	defer cancel()
 	conn, err := c.DialTCP(ctx, "www.gstatic.com:443")
 	if err != nil {
 		return fmt.Errorf("cannot reach node: %w", err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(8 * time.Second))
+	stopClosing := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopClosing()
+	deadline, _ := ctx.Deadline()
+	conn.SetDeadline(deadline)
 	err = conn.Handshake()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	var se *singlink.StatusError
 	if errors.As(err, &se) && (se.Code == singlink.StatusDialFailed || se.Code == singlink.StatusForbiddenDest) {
 		return nil // authenticated; the probe destination itself is the problem
@@ -175,15 +174,7 @@ func check(c *singlink.Client) error {
 }
 
 // Stop closes the local port and all connections.
-func (e *Engine) Stop() {
-	e.mu.Lock()
-	stop := e.stop
-	e.stop, e.client = nil, nil
-	e.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
-}
+func (e *Engine) Stop() { e.stopCurrent() }
 
 // Status returns current counters.
 func (e *Engine) Status() Status {

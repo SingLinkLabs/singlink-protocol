@@ -4,18 +4,14 @@
 package singlink
 
 import (
-	"bufio"
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
-	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +20,11 @@ import (
 // ServerConfig configures a node.
 type ServerConfig struct {
 	Key *ServerPrivateKey
+	// ReplayStore must be atomic/durable; all instances sharing keys share it.
+	ReplayStore ReplayStore
+	// ReplayFile opens pre-initialized Unix local state when ReplayStore is nil.
+	ReplayFile       string
+	ReplayMaxEntries int
 	// OldKeys are still accepted during a key rotation (tried after Key).
 	// Rotate node keys regularly: whoever later obtains a static key can
 	// decrypt recorded request headers made to it (SPEC §5.4).
@@ -82,7 +83,7 @@ type ServerConfig struct {
 // Server is an SingLink node.
 type Server struct {
 	cfg      ServerConfig
-	replay   *replayCache
+	replay   ReplayStore
 	subjects subjects
 	res      *resolver
 	log      *slog.Logger
@@ -92,10 +93,11 @@ type Server struct {
 	started time.Time
 	guard   *guard
 
-	revMu    sync.RWMutex
-	revoked  revocations
-	revStamp string
-	revCheck atomic.Int64
+	revReloadMu sync.Mutex
+	revMu       sync.RWMutex
+	revoked     revocations
+	revStamp    string
+	revCheck    atomic.Int64
 
 	watchOnce sync.Once
 	sessMu    sync.Mutex
@@ -132,6 +134,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	if cfg.MaxTimeSkew == 0 {
 		cfg.MaxTimeSkew = 120 * time.Second
+	}
+	if cfg.MaxTimeSkew < 0 || cfg.MaxTimeSkew > time.Hour {
+		return nil, errors.New("singlink: invalid timestamp window")
+	}
+	if cfg.ReplayStore == nil {
+		store, err := OpenFileReplayStore(cfg.ReplayFile, cfg.ReplayMaxEntries)
+		if err != nil {
+			return nil, ErrReplayStore
+		}
+		cfg.ReplayStore = store
 	}
 	if cfg.HandshakeTimeout == 0 {
 		cfg.HandshakeTimeout = 10 * time.Second
@@ -180,7 +192,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	s := &Server{
 		cfg:    cfg,
-		replay: newReplayCache(cfg.MaxTimeSkew),
+		replay: cfg.ReplayStore,
 		res:    &resolver{allowPrivate: cfg.AllowPrivate, blockedPorts: bp, deny: cfg.DenyCIDRs, r: net.DefaultResolver},
 		guard:  newGuard(cfg.MaxConnections, cfg.MaxPendingPerIP),
 		log:    log,
@@ -190,7 +202,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		started:  time.Now(),
 		sessions: map[*session]struct{}{},
 	}
-	s.reloadRevoked()
+	if err := s.reloadRevoked(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -297,7 +311,13 @@ func (s *Server) handle(raw net.Conn) {
 		fail(errProbe)
 		return
 	}
-	if !s.replay.checkAndAdd(hs.E, now) {
+	// Mark before any destination operation. Store acknowledgement is durable.
+	markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
+	tag := sha256.Sum256(append(append([]byte{}, hs.replayDomain[:]...), hs.E...))
+	fresh, storeErr := s.replay.CheckAndMark(markCtx, tag, hs.req.ts.Add(s.cfg.MaxTimeSkew+time.Second))
+	markTimedOut := markCtx.Err() != nil
+	markCancel()
+	if storeErr != nil || !fresh || markTimedOut {
 		fail(errProbe)
 		return
 	}
@@ -384,11 +404,11 @@ func (s *Server) serveTCP(ctx context.Context, conn *Conn, req request, lim *lim
 	if err := conn.fw.writeFrame(frameStatus, []byte{byte(StatusOK)}); err != nil {
 		return
 	}
-	if len(req.early) > 0 {
-		if _, err := target.Write(req.early); err != nil {
-			return
-		}
-		s.Stats.Up.Add(int64(len(req.early)))
+	earlyCtx, earlyCancel := context.WithTimeout(ctx, s.cfg.IdleTimeout)
+	err = forwardEarlyData(earlyCtx, target, req.early, lim, &s.Stats)
+	earlyCancel()
+	if err != nil {
+		return
 	}
 	relay(ctx, conn, target, lim, s.cfg.IdleTimeout, &s.Stats)
 }
@@ -525,56 +545,31 @@ func (s *Server) isRevoked(t *Token) bool {
 	return s.revoked.has(t)
 }
 
-func (s *Server) reloadRevoked() {
+func (s *Server) reloadRevoked() error {
 	if s.cfg.RevokedFile == "" {
-		return
+		return nil
 	}
-	b, err := os.ReadFile(s.cfg.RevokedFile)
+	s.revReloadMu.Lock()
+	defer s.revReloadMu.Unlock()
+	b, err := readRevocations(s.cfg.RevokedFile)
 	if err != nil {
-		return
+		return err
 	}
 	stamp := string(hash(b))
 	s.revMu.RLock()
 	same := stamp == s.revStamp
 	s.revMu.RUnlock()
 	if same {
-		return
+		return nil
 	}
-	r := revocations{tokens: map[[16]byte]bool{}, subjects: map[[16]byte]bool{}, devices: map[string]bool{}}
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
-			continue
-		}
-		kind, val := "token", f[0]
-		if len(f) >= 2 {
-			kind, val = f[0], f[1]
-		}
-		switch kind {
-		case "token", "subject":
-			id, err := hex.DecodeString(val)
-			if err != nil || len(id) != 16 {
-				continue
-			}
-			if kind == "token" {
-				r.tokens[[16]byte(id)] = true
-			} else {
-				r.subjects[[16]byte(id)] = true
-			}
-		case "device":
-			k, err := B64.DecodeString(val)
-			if err == nil && len(k) == 32 {
-				r.devices[string(k)] = true
-			}
-		}
+	r, err := parseRevocations(b)
+	if err != nil {
+		return err
 	}
 	s.revMu.Lock()
 	s.revoked, s.revStamp = r, stamp
 	s.revMu.Unlock()
 	s.log.Info("revocation list loaded", "tokens", len(r.tokens), "subjects", len(r.subjects), "devices", len(r.devices))
-
-	// Close live sessions that are now revoked.
 	s.sessMu.Lock()
 	for sess := range s.sessions {
 		if r.has(sess.tok) {
@@ -582,6 +577,7 @@ func (s *Server) reloadRevoked() {
 		}
 	}
 	s.sessMu.Unlock()
+	return nil
 }
 
 // relay copies both directions until both are done, the context ends or the

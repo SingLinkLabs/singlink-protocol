@@ -260,12 +260,7 @@ func (rs *resolver) resolve(ctx context.Context, a Addr) (netip.AddrPort, Status
 		return netip.AddrPort{}, StatusForbiddenDest
 	}
 	allowed := func(ip netip.Addr) bool {
-		for _, p := range rs.deny {
-			if p.Contains(ip.Unmap()) {
-				return false
-			}
-		}
-		return rs.allowPrivate || (publicIP(ip) && !rs.local.has(ip))
+		return rs.allowedAddress(ip)
 	}
 	if a.IP.IsValid() {
 		if !allowed(a.IP) {
@@ -274,7 +269,7 @@ func (rs *resolver) resolve(ctx context.Context, a Addr) (netip.AddrPort, Status
 		return netip.AddrPortFrom(a.IP, a.Port), StatusOK
 	}
 	rs.mu.Lock()
-	if c, ok := rs.cache[a.Host]; ok && time.Now().Before(c.exp) {
+	if c, ok := rs.cache[a.Host]; ok && time.Now().Before(c.exp) && allowed(c.ip) {
 		rs.mu.Unlock()
 		return netip.AddrPortFrom(c.ip, a.Port), StatusOK
 	}

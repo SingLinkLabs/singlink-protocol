@@ -6,6 +6,7 @@ package engine
 import (
 	"crypto/ed25519"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func TestStartWithCustomTransport(t *testing.T) {
 	key, _ := singlink.GenerateServerKey()
 	issuer, _ := singlink.GenerateEd25519()
 	dev, _ := singlink.GenerateEd25519()
-	srv, _ := singlink.NewServer(singlink.ServerConfig{Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey))})
+	srv, _ := singlink.NewServer(singlink.ServerConfig{BlockedPorts: []uint16{443}, ReplayStore: testReplayStore(t), Key: key, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey))})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -49,4 +50,13 @@ func TestStartWithCustomTransport(t *testing.T) {
 	if !stopped || e.Status().Running {
 		t.Fatal("stop not propagated")
 	}
+}
+
+func testReplayStore(t *testing.T) singlink.ReplayStore {
+	t.Helper()
+	s, err := singlink.InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

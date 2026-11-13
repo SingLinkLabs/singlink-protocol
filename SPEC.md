@@ -31,7 +31,7 @@ On top of that it adds:
 | Post-quantum | no | hybrid X25519 + ML-KEM-768 (FIPS 203) key agreement (see §5.4 for exact scope) |
 | Forward secrecy | from outer TLS only | inner ephemeral–ephemeral X25519 for all traffic after the first flight |
 | Active probing | fallback (by configuration) | built in: anything that does not authenticate goes to a real website, with no timing difference between kinds of probes over TLS |
-| Replay | n/a | timestamp window, ephemeral-key cache, restart rule |
+| Replay | n/a | timestamp window and mandatory atomic durable replay store |
 | Length obfuscation | Vision flow (optional) | random header padding and per-frame padding |
 
 Non-goals for SingLink Beta:
@@ -196,7 +196,8 @@ all bytes read so far.
 7. The token is currently valid and not revoked. Exception: a token that
    expired less than 24 h ago gets an explicit "expired" answer (step 9),
    so the app can tell the user.
-8. `E` has not been seen within the last 2 × 120 s (replay cache).
+8. The key-domain/`E` tag is atomically and durably marked until its complete
+   timestamp acceptance window ends; unavailable state rejects the request.
 
 After step 8 the peer is an authenticated user, and the node answers.
 
@@ -266,13 +267,17 @@ It SHOULD tell the user to check the device clock and renew the link.
   token copied from one node is useless without the device key. Exception:
   links that embed the device seed (§9) are bearer credentials.
 - **Replay.**
-  - Within a node process, a captured first flight is rejected by the
-    ephemeral-key cache.
-  - Across restarts, the node rejects flights stamped before it started.
-    The cost: clients whose clock lags the node's are refused for up to
-    that lag after a restart.
-  - Nodes that share a static key do not share a replay cache. Give each
-    node (and each process) its own key, or share a replay store.
+  - Every accepted first flight is atomically marked in a mandatory durable store
+    before any destination operation. Opaque tags cover the full accepted
+    timestamp window and survive process restarts.
+  - Every instance accepting the same static keys (including old rotation keys)
+    must share one atomic/durable store. The reference local-file backend supports
+    same-host Unix processes; independent files across hosts are not shared state.
+  - Missing, corrupt, full, unavailable or backwards-clock state fails closed.
+    Never reset/reinitialize state while its keys remain accepted.
+  - This is short-lived security state (opaque tag, expiry and global clock
+    watermark), not a claim of retaining no data. See
+    [the backend, retention and deployment contract](docs/SECURITY-REMEDIATION.md).
 - **Truncation.** A stream ends cleanly only with an EOF frame. An
   implementation MUST report a stream that ends without one as an error,
   never as end of data.

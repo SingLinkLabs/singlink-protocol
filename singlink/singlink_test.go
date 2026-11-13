@@ -17,6 +17,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +49,11 @@ func newEnv(t *testing.T, o envOpt) *env {
 	}
 	issuer, _ := GenerateEd25519()
 	device, _ := GenerateEd25519()
-	cfg := ServerConfig{
+	store, err := InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ServerConfig{ReplayStore: store,
 		Key:          key,
 		Issuers:      NewIssuers(issuer.Public().(ed25519.PublicKey)),
 		AllowPrivate: true,
