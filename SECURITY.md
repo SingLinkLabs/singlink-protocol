@@ -26,6 +26,8 @@ remediation of the 2026-11-13 source audit,
   host do not protect against replay between them. Simplest: one key per host.
 - Never delete, reset or restore an older copy of the state while its keys are
   still accepted.
-- The state holds only keyed opaque tags and expiries (no IP, destination,
-  payload, user or token data), each kept about four minutes. Details:
+- What the state holds: to prevent replay attacks, a node briefly keeps a
+  cryptographically processed one-time handshake marker, deleted automatically
+  after about 4 minutes. It contains no IP address, destination, account or any
+  information that identifies a user, and it is not a log. Details:
   [docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md).

@@ -276,9 +276,11 @@ It SHOULD tell the user to check the device clock and renew the link.
     same-host Unix processes; independent files across hosts are not shared state.
   - Missing, corrupt, full, unavailable or backwards-clock state fails closed.
     Never reset/reinitialize state while its keys remain accepted.
-  - This is short-lived security state (opaque tag, expiry and global clock
-    watermark), not a claim of retaining no data. See
-    [the backend, retention and deployment contract](docs/SECURITY-REMEDIATION.md).
+  - Each mark is a one-time handshake marker: a keyed one-way hash derived
+    with the node's private key, plus its expiry, deleted automatically after
+    about four minutes. It contains no IP address, destination, account or
+    other information that identifies a user, and it is not a log. See
+    [the backend and deployment contract](docs/SECURITY-REMEDIATION.md).
 - **Truncation.** A stream ends cleanly only with an EOF frame. An
   implementation MUST report a stream that ends without one as an error,
   never as end of data.

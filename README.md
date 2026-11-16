@@ -143,11 +143,16 @@ own name.
 
 ## Required security-state migration
 
-The server now requires explicitly initialized durable replay state; there is no
-memory-only fallback. Existing node configurations must add `replay_file` and
-provision its private state once for fresh keys before startup. Never reset state
-while its keys remain accepted. Nodes on different hosts that accept the same key must share one external atomic
-store (or simply use one key per host). The state holds only keyed opaque tags and
-expiries for about four minutes. See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
+To prevent replay attacks, a node briefly keeps a cryptographically processed
+one-time handshake marker, deleted automatically after about 4 minutes. It
+contains no IP address, destination, account or any information that identifies
+a user, and it is not a log.
+
+The server requires this anti-replay state to be explicitly initialized and
+durable; there is no memory-only fallback. Existing node configurations must add
+`replay_file` and provision it once with `singlink replay-init` for fresh keys
+before startup. Never reset it while its keys remain accepted. Nodes on different
+hosts that accept the same key must share one external atomic store (or simply
+use one key per host). See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
 for same-host sharing, unsupported multi-host file storage, Windows server-backend
 limits, clock/GC behavior and the explicit `empty` revocation-list format.

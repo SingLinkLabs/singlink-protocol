@@ -101,29 +101,28 @@ before first startup; the unit intentionally does not auto-initialize lost or
 missing state. Preserve it across restarts and key rotation. Do not weaken
 permissions to make startup pass.
 
-### Data retained and clock policy
+### Anti-replay marker and clock policy
 
-Each record is a 32-byte tag and an 8-byte expiry. The tag is
-HMAC-SHA256 of the client's ephemeral public key `E`, keyed with a secret
-derived (HKDF) from the node static key that decrypted the flight. Without that
-node private key, the state file cannot be matched against captured traffic.
-The snapshot also contains format/checksum metadata and a global high-water
-clock value. It contains no source IP, destination, payload, account/subject
-identifier, raw token, device key or seed, or node private key.
+To prevent replay attacks, a node briefly keeps a cryptographically processed
+one-time handshake marker, deleted automatically after about 4 minutes. It
+contains no IP address, destination, account or any information that identifies
+a user, and it is not a log.
 
-What the state does reveal: how many first flights were accepted within the
-last few minutes, and, through the expiries, roughly when (the client's
-timestamp to the second). This is short-lived **security state**, not a log of
-users or destinations, but it is not "no data at all". Product privacy
-statements should describe it accordingly: an anti-replay marker per accepted
-connection, kept for about four minutes, unlinkable to a user, IP address or
-destination.
+Technically, each marker is a 32-byte keyed one-way hash plus an 8-byte expiry.
+The hash is HMAC-SHA256 of the client's single-use ephemeral public key `E`,
+keyed with a secret derived (HKDF) from the node private key that decrypted the
+flight; clients generate a fresh `E` for every handshake. Without
+that node private key, a marker cannot be matched to any captured traffic. The
+state file also carries format/checksum metadata and one global clock value
+used for rollback protection. It holds no source IP, destination, payload,
+account/subject identifier, raw token, device key or seed, or node private key,
+and markers are not linked to each other or to any user.
 
 Every instance supports a timestamp skew of at most 120 seconds (the original
 default); larger `MaxTimeSkew` settings refuse startup. An instance may choose a
-smaller acceptance window, but all instances retain tags until the request
+smaller acceptance window, but all instances keep markers until the request
 timestamp plus the common 120-second ceiling and a conservative one-second
-rounding margin. A short-window instance therefore cannot expire a mark while
+rounding margin. A short-window instance therefore cannot expire a marker while
 a longer supported instance would still accept that same flight.
 
 Expired marks are removed by the next admission and by a maintenance pass that
