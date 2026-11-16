@@ -77,6 +77,8 @@ VPN App（Flutter）放在另一個獨立倉庫。
 ## 必要的安全狀態遷移
 
 服務端現在要求明確初始化的持久防重放狀態，沒有記憶體回退模式。舊節點設定需新增
-`replay_file`，並在新 key 首次啟動前配置私有狀態；key 仍被接受時不得清空或還原舊狀態。
+`replay_file`，並在新 key 首次啟動前用 `singlink replay-init` 配置私有狀態；key 仍被接受時不得清空或還原舊狀態。
+不同主機若接受同一把 key，必須共用同一個外部原子 store（或每台主機用自己的 key）。狀態只保存以節點金鑰
+為鍵的雜湊標記及到期時間，約四分鐘後刪除，不含 IP、目的地、內容或用戶資料。
 同主機共享、跨主機外接 store、Windows 服務端 backend 限制、clock/GC 行為及撤銷列表
 明確 `empty` 格式，詳見[修復與部署契約](docs/SECURITY-REMEDIATION.md)。

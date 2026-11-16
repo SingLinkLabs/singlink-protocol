@@ -112,6 +112,7 @@ singlink keygen issuer  > issuer.json       # seed stays on the account backend
 singlink keygen device  > device.json       # normally generated on the user's device
 singlink token issue -issuer <issuer seed> -device <device public key> -days 1 -caps tcp,udp
 singlink link -server vpn.example.com:443 -pk <node public key> -token <token> -device <device seed> -sni vpn.example.com
+singlink replay-init -path /var/lib/singlink/replay.db   # once, for new keys (see SECURITY.md)
 singlink server -c deploy/server.example.json
 ```
 
@@ -145,6 +146,8 @@ own name.
 The server now requires explicitly initialized durable replay state; there is no
 memory-only fallback. Existing node configurations must add `replay_file` and
 provision its private state once for fresh keys before startup. Never reset state
-while its keys remain accepted. See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
+while its keys remain accepted. Nodes on different hosts that accept the same key must share one external atomic
+store (or simply use one key per host). The state holds only keyed opaque tags and
+expiries for about four minutes. See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
 for same-host sharing, unsupported multi-host file storage, Windows server-backend
 limits, clock/GC behavior and the explicit `empty` revocation-list format.
