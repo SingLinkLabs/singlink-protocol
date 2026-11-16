@@ -1,4 +1,4 @@
-// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
 // SPDX-License-Identifier: Apache-2.0
 
 // Command singlink is the SingLink Beta Protocol reference node, client and key tool.
@@ -33,6 +33,7 @@ import (
 )
 
 const usage = `singlink — SingLink Beta protocol tool (` + singlink.Version + `)
+` + singlink.Attribution + `
 
 Usage:
   singlink keygen server|issuer|device      generate a key pair (JSON)
@@ -72,7 +73,7 @@ func main() {
 	case "version", "-v", "--version":
 		fmt.Println(singlink.Version, singlink.ProtocolName)
 		fmt.Println(singlink.Attribution)
-		fmt.Println("Copyright 2026 SingLinkLabs · Apache-2.0")
+		fmt.Println("Copyright 2026 SingLinkVPN · Apache-2.0")
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -376,8 +377,15 @@ func server(args []string) error {
 	if err != nil {
 		return err
 	}
+	cfg.Logger.Info("SingLink node starting", "attribution", singlink.Attribution)
 	cfg.Logger.Info("SingLink node listening", "addr", ln.Addr().String(), "tls", cfg.TLS != nil, "issuers", len(pubs))
 	return srv.Serve(ln)
+}
+
+// logAttribution writes the required attribution (NOTICE) once when a
+// client or demo starts. Derivative works must keep it.
+func logAttribution() {
+	fmt.Fprintln(os.Stderr, singlink.Attribution)
 }
 
 func waitSignal() {
@@ -391,6 +399,7 @@ func client(args []string) error {
 	l := fs.String("link", "", "singlink:// link")
 	listen := fs.String("listen", "127.0.0.1:1080", "local SOCKS5 address")
 	fs.Parse(args)
+	logAttribution()
 	var e engine.Engine
 	if err := e.Start(*l, *listen); err != nil {
 		return err
@@ -409,6 +418,7 @@ func demo(args []string) error {
 	nodeAddr := fs.String("node", "127.0.0.1:8443", "address for the demo node")
 	linkOnly := fs.Bool("link-only", false, "run only the node and print a link for another client (e.g. the Flutter app)")
 	fs.Parse(args)
+	logAttribution()
 
 	key, _ := singlink.GenerateServerKey()
 	issuer, _ := singlink.GenerateEd25519()

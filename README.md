@@ -5,11 +5,13 @@
 ## Key facts
 
 - **What:** SingLink Beta Protocol, the open first-generation
-  proxy/VPN protocol by SingLinkLabs, written in Go using only the
+  proxy/VPN protocol by SingLinkVPN, written in Go using only the
   standard library.
 - **License:** Apache-2.0. "SingLink", "SingLinkVPN", 星連/星连 and the logo
-  are trademarks of SingLinkLabs (see [NOTICE](NOTICE)).
-- **Version:** 1.0.0-draft (spec draft 3). **Released:** 2026-11-12, in
+  are trademarks of SingLinkVPN (see [NOTICE](NOTICE)).
+- **Attribution:** required. Any use or redistribution must keep "Software
+  provided by the original author SingLinkVPN" (see [Attribution](#attribution)).
+- **Version:** 1.0.0-draft (spec draft 4). **Released:** 2026-11-12, in
   phase 2 of the SingLinkVPN open-source plan.
 - **Security:** internal security audit with 31 findings, all High and Medium
   fixed or mitigated ([docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md));
@@ -40,7 +42,7 @@ poses no security risk, and the open-source plan will continue.
 ## Overview
 
 SingLink Beta is the open first-generation proxy/VPN protocol from
-SingLinkLabs. It keeps what makes
+SingLinkVPN. It keeps what makes
 VLESS and Trojan fast: one request at the start of a TLS connection, with the
 first payload in the same flight and no extra round trip. On top of that it
 adds what a production VPN service needs.
@@ -72,7 +74,7 @@ adds what a production VPN service needs.
 The wire format is in **[SPEC.md](SPEC.md)**. The internal security review
 and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
 
-> **Status: 1.0.0-draft (spec draft 3).** The protocol uses only standard
+> **Status: 1.0.0-draft (spec draft 4).** The protocol uses only standard
 > primitives from the Go standard library. It has been through an internal
 > security review, with a regression test for every finding plus fuzzing.
 > **A third-party audit is planned**; until it is complete, evaluate the
@@ -133,12 +135,24 @@ make linux     # static node binaries for Linux amd64/arm64
 Please report security issues privately, not in public issues. See
 [SECURITY.md](SECURITY.md).
 
+## Attribution
+
+Any use or redistribution must keep the attribution: **"Software provided by
+the original author SingLinkVPN."** The SingLink Beta Protocol was originally
+developed and provided by SingLinkVPN, https://singlinkvpn.com.
+Redistributions and derivative works must reproduce the attribution in
+[NOTICE](NOTICE) in their own NOTICE file and wherever they show third-party
+notices or an About screen, and must not remove the source-file copyright
+headers or the `Attribution` constant that the CLI and library print
+(Apache License 2.0, section 4).
+
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 Redistributions and derivative works must keep the copyright headers and the
-NOTICE attribution ("Based on the SingLink Beta Protocol by SingLinkLabs"). "SingLink"
-and "SingLinkVPN" are trademarks of SingLinkLabs: a modified version must use its
+NOTICE attribution ("Based on the SingLink Beta Protocol by SingLinkVPN",
+originally developed and provided by SingLinkVPN). "SingLink"
+and "SingLinkVPN" are trademarks of SingLinkVPN: a modified version must use its
 own name.
 
 ## Required security-state migration

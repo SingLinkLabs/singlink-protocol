@@ -1,4 +1,4 @@
-// Copyright 2026 SingLinkLabs (https://github.com/SingLinkLabs)
+// Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
 // SPDX-License-Identifier: Apache-2.0
 
 // Package singlink implements the SingLink Beta protocol.
@@ -33,15 +33,21 @@ const (
 	Version = "1.0.0-draft"
 	// ProtocolName is the public protocol name used by the CLI and app metadata.
 	ProtocolName = "SingLink Beta"
-	// Attribution must be kept by redistributions and derivative works
-	// (see NOTICE, Apache License 2.0 section 4(d)).
-	Attribution = "Based on the SingLink Beta Protocol by SingLinkLabs · https://github.com/SingLinkLabs/singlink-protocol"
+	// OriginalAuthor names the original author of this software and protocol.
+	OriginalAuthor = "SingLinkVPN"
+	// Attribution must be kept by every use, redistribution and derivative
+	// work, unmodified (see NOTICE, Apache License 2.0 section 4(d)). The
+	// CLI prints it in its help and version output and logs it when a node
+	// or client starts; the FFI library returns it from SingLinkVersion.
+	Attribution = "Based on the SingLink Beta Protocol, originally developed and provided by " +
+		OriginalAuthor + ", https://singlinkvpn.com · https://github.com/SingLinkLabs/singlink-protocol"
 
 	// Identifier is mixed into every handshake key derivation, the way
 	// WireGuard binds its author's identifier into its handshake. An
 	// implementation that drops or changes it cannot interoperate with
-	// SingLink Beta peers. These legacy bytes are retained for compatibility.
-	Identifier = "SingLink/1 by SingLinkLabs (singlinkvpn.com)"
+	// SingLink Beta peers. Spec draft 4 changed its value, so draft 3 and
+	// draft 4 peers derive different keys and do not interoperate.
+	Identifier = "SingLink/1 by SingLinkVPN (singlinkvpn.com)"
 
 	wireVersion = 1
 	label       = "SingLink/1"

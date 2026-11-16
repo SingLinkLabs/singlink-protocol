@@ -1,7 +1,9 @@
 # SingLink Beta Protocol Specification
 
-Status: **Draft 3** (2026-11-12). Draft 3 binds the protocol identifier
-`IDENT` into the handshake (§4). Draft 2 added the fixes from an
+Status: **Draft 4** (2026-11-16). Draft 4 changes `IDENT` (§4) to
+`SingLink/1 by SingLinkVPN (singlinkvpn.com)`; this changes every derived key,
+so draft 4 peers do not interoperate with draft 3 peers. Draft 3 bound the
+protocol identifier `IDENT` into the handshake. Draft 2 added the fixes from an
 internal security review; see [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
 **It has not yet had an independent third-party audit.**
 Wire version byte: `0x01`. Reference implementation: `singlink/` (Go,
@@ -10,8 +12,8 @@ standard library only).
 The public protocol and project name is **SingLink Beta**. The legacy ASCII
 strings containing `SingLink/1` below are fixed cryptographic compatibility
 constants, not the public name. Implementations MUST retain their exact bytes
-to interoperate with existing peers; the naming update does not change the wire
-format or key derivation.
+to interoperate with other draft 4 peers; the "SingLink Beta" naming does not
+change the wire format or key derivation.
 
 The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -54,7 +56,7 @@ without padding.
 
 - Node public key: `X25519 public (32) || ML-KEM-768 encapsulation key (1184)` = 1216 bytes.
 - Node private key: `X25519 scalar (32) || ML-KEM-768 seed d||z (64)` = 96 bytes.
-- `IDENT` = the ASCII string `SingLink/1 by SingLinkLabs (singlinkvpn.com)`, mixed
+- `IDENT` = the ASCII string `SingLink/1 by SingLinkVPN (singlinkvpn.com)`, mixed
   into both handshake salts. It identifies the protocol and its origin, as the
   identifier string does in WireGuard; peers that use a different `IDENT`
   derive different keys and cannot interoperate.

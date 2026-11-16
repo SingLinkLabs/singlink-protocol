@@ -1,6 +1,6 @@
 //go:build !linux && !darwin && !freebsd && !openbsd && !netbsd && !dragonfly
 
-// Copyright 2026 SingLinkLabs
+// Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
 // SPDX-License-Identifier: Apache-2.0
 package singlink
 

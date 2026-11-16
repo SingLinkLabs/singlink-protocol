@@ -4,9 +4,10 @@
 
 ## 重點摘要
 
-- **內容：** SingLink Beta 協議初代版本，SingLinkLabs 開源的代理／VPN 協議，以 Go 標準庫編寫。
-- **授權：** Apache-2.0。「SingLink」、「SingLinkVPN」、星連／星连名稱與標誌為 SingLinkLabs 商標（見 [NOTICE](NOTICE)）。
-- **版本：** 1.0.0-draft（規格第 3 版草案）。**發布日期：** 2026-11-12，星連VPN開源計畫第二階段。
+- **內容：** SingLink Beta 協議初代版本，SingLinkVPN 開源的代理／VPN 協議，以 Go 標準庫編寫。
+- **授權：** Apache-2.0。「SingLink」、「SingLinkVPN」、星連／星连名稱與標誌為 SingLinkVPN 商標（見 [NOTICE](NOTICE)）。
+- **署名：** 任何使用或轉發，都必須保留署名：軟件由原作者 SingLinkVPN 提供（見[署名](#署名)）。
+- **版本：** 1.0.0-draft（規格第 4 版草案）。**發布日期：** 2026-11-12，星連VPN開源計畫第二階段。
 - **安全：** 已完成內部安全審計，共 31 個問題，「高」和「中」等級全部修好或緩解（[docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)）；已規劃第三方審計。
 - **沿革：** SingLink Beta 協議從星連VPN 早期版本、SingLink Beta 一路演進到現在的 SingLink 2.0；初代版本延續了星連VPN 的帳號權限、裝置綁定與安全設計理念。
 - **暫不公開：** 最新版本（SingLink 2.0 核心與現行星連VPN 正式 App），基於安全考量。
@@ -18,7 +19,7 @@ SingLink Beta 協議從星連VPN 早期版本、SingLink Beta 一路演進到現
 
 ## 概覽
 
-SingLink Beta 協議是 SingLinkLabs 開源的初代 SingLink Beta 協議，是一套代理／VPN 協議。
+SingLink Beta 協議是 SingLinkVPN 開源的初代 SingLink Beta 協議，是一套代理／VPN 協議。
 
 它保留了 VLESS、Trojan 速度快的優點：TLS 連線一開始只送一次請求，第一段資料跟請求一起送出，不必多等一個來回。在這個基礎上，它補齊了正式營運 VPN 服務需要的能力。
 
@@ -38,7 +39,7 @@ SingLink Beta 協議是 SingLinkLabs 開源的初代 SingLink Beta 協議，是�
 
 ## 狀態
 
-**版本：1.0.0-draft（規格第 3 版草案）**
+**版本：1.0.0-draft（規格第 4 版草案）**
 
 - 只用 Go 標準庫的成熟加密元件，沒有第三方套件，也沒有自創加密演算法。
 - 已完成**內部安全審計**，共找到 31 個問題，「高」和「中」等級全部修好或緩解，詳見 [docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)。
@@ -70,9 +71,13 @@ VPN App（Flutter）放在另一個獨立倉庫。
 4. **偽裝網站：** 節點網域放一個真實網站，`fallback` 指向它，並開啟 `fallback_proxy_protocol`，憑證用正式 CA 簽發。
 5. **系統服務：** 用 `deploy/singlink.service` 部署，已包含系統沙盒、私鑰保護和崩潰自動重啟。
 
+## 署名
+
+任何使用或轉發，都必須保留署名：軟件由原作者 SingLinkVPN 提供。SingLink Beta 協議最初由 SingLinkVPN（https://singlinkvpn.com）開發並提供。轉發版本與衍生作品必須在自己的 NOTICE 檔，以及顯示第三方授權聲明或「關於」畫面的地方，重現 [NOTICE](NOTICE) 裡的署名文字，並且不得刪除原始檔開頭的版權標示，或命令列工具與程式庫輸出的 `Attribution` 署名常數（Apache License 2.0 第 4 條）。
+
 ## 授權與署名
 
-採用 Apache License 2.0（見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)）。任何人轉發本專案或以它為基礎修改，都必須保留每個原始檔開頭的版權標示和 NOTICE 裡的署名「Based on the SingLink Beta Protocol by SingLinkLabs」，並標明改過哪些檔案。「SingLink」「SingLinkVPN」「星連」「星连」名稱與圖示是 SingLinkLabs 的商標，修改版必須使用自己的名稱。
+採用 Apache License 2.0（見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)）。任何人轉發本專案或以它為基礎修改，都必須保留每個原始檔開頭的版權標示和 NOTICE 裡的署名「Based on the SingLink Beta Protocol by SingLinkVPN」與原作者 SingLinkVPN 的署名，並標明改過哪些檔案。「SingLink」「SingLinkVPN」「星連」「星连」名稱與圖示是 SingLinkVPN 的商標，修改版必須使用自己的名稱。
 
 ## 必要的安全狀態遷移
 

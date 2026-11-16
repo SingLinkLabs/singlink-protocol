@@ -1,31 +1,46 @@
 SingLink Beta Protocol, first generation
-Copyright 2026 SingLinkLabs
+Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
 https://github.com/SingLinkLabs/singlink-protocol
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-Attribution
------------
-Section 4 of the Apache License 2.0 applies to every redistribution of this
-work or of any work derived from it, in source or binary form. You must:
+Original author
+---------------
+Originally developed and provided by SingLinkVPN — https://singlinkvpn.com
+
+Attribution (required)
+----------------------
+Anyone who uses, redistributes or builds on this work must credit its
+original author. Section 4 of the Apache License 2.0 applies to every
+redistribution of this work or of any work derived from it, in source or
+binary form, including hosted services, apps and app-store releases. You
+must:
 
   1. keep the copyright and license headers at the top of each source file;
   2. include a copy of the LICENSE file;
-  3. mark the files you changed; and
-  4. include this NOTICE file, or reproduce its attribution text, in your
-     NOTICE file, in your documentation, or where your product shows
-     third-party notices (for example an "About" or "Open-source licenses"
-     screen):
+  3. mark the files you changed;
+  4. include this NOTICE file, or reproduce the attribution text below, in
+     your own NOTICE file, and also in your documentation and wherever your
+     product shows third-party notices or an "About" screen (Apache License
+     2.0, section 4(d)); and
+  5. keep the in-code attribution unmodified: the `Attribution` and
+     `OriginalAuthor` constants in singlink/const.go, the attribution that
+     the command-line tool prints and logs, and the attribution returned by
+     the library's SingLinkVersion function.
 
-     Based on the SingLink Beta Protocol by SingLinkLabs
+Attribution text to reproduce:
+
+     Software provided by the original author SingLinkVPN.
+     Based on the SingLink Beta Protocol by SingLinkVPN
+     Originally developed and provided by SingLinkVPN — https://singlinkvpn.com
      https://github.com/SingLinkLabs/singlink-protocol
 
 Trademarks
 ----------
 "SingLink", "SingLinkVPN", their Chinese names (星連, 星连) and the logo are
-trademarks of SingLinkLabs. The license does not grant permission to use these
+trademarks of SingLinkVPN. The license does not grant permission to use these
 names or marks, except as required to describe the origin of the work (Apache
 License 2.0, section 6). A modified version must not be called "SingLink" or
-presented as an official SingLinkLabs product. The fixed compatibility
+presented as an official SingLinkVPN product. The fixed compatibility
 constants in SPEC.md identify protocol interoperability; they do not grant
 use of the trademarks.
