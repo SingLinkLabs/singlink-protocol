@@ -101,3 +101,15 @@ func TestFutureFlightRejectedAcrossRestart(t *testing.T) {
 		t.Fatal("old-key replay namespace reset on rotation")
 	}
 }
+
+// auditFreshInstanceConfig models a new node process over the same durable
+// replay state: same keys and configuration, separately opened store.
+func auditFreshInstanceConfig(t *testing.T, cfg ServerConfig) ServerConfig {
+	t.Helper()
+	reopened, err := OpenFileReplayStore(cfg.ReplayStore.(*FileReplayStore).path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ReplayStore = reopened
+	return cfg
+}

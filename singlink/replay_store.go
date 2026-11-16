@@ -29,6 +29,15 @@ type ReplayStore interface {
 
 var ErrReplayStore = errors.New("singlink: replay store unavailable or invalid")
 
+// ReplayPruner is optionally implemented by a ReplayStore that can erase
+// expired marks without a new admission. A serving node calls it every
+// replayPruneInterval so an idle node does not keep expired tags around.
+type ReplayPruner interface {
+	Prune(context.Context) error
+}
+
+const replayPruneInterval = 30 * time.Second
+
 const defaultReplayEntries = 65536
 const maxReplayEntries = 1 << 20
 const replayHeaderSize = 20
@@ -275,4 +284,38 @@ func (s *FileReplayStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry
 		return false, err
 	}
 	return true, nil
+}
+
+// Prune removes expired marks. Like admission it never removes a mark that a
+// supported instance could still accept, and it refuses to run while the
+// clock is behind the durable watermark.
+func (s *FileReplayStore) Prune(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	snap, err := s.load()
+	if err != nil {
+		return err
+	}
+	n := s.now().UnixNano()
+	if n < snap.high {
+		return ErrReplayStore
+	}
+	removed := false
+	for k, e := range snap.entries {
+		if e <= n {
+			delete(snap.entries, k)
+			removed = true
+		}
+	}
+	if !removed {
+		return nil
+	}
+	snap.high = n
+	return s.save(snap)
 }

@@ -11,7 +11,15 @@ LoadCredential=server.json:/etc/singlink/server.json
 LoadCredential=fullchain.pem:/etc/singlink/fullchain.pem
 LoadCredential=privkey.pem:/etc/singlink/privkey.pem
 ExecStart=/usr/local/bin/singlink server -c ${CREDENTIALS_DIRECTORY}/server.json
-DynamicUser=yes
+# Replay state (replay_file) needs a stable owner and a real private directory,
+# so the node runs as a static system user instead of DynamicUser. Provision
+# the state once, before the first start, for NEW keys only:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin singlink
+#   install -d -m 0700 -o singlink -g singlink /var/lib/singlink
+#   runuser -u singlink -- /usr/local/bin/singlink replay-init -path /var/lib/singlink/replay.db
+# Never delete or re-initialize it while the node keys remain accepted.
+User=singlink
+Group=singlink
 StateDirectory=singlink
 StateDirectoryMode=0700
 AmbientCapabilities=CAP_NET_BIND_SERVICE

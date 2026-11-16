@@ -5,7 +5,6 @@ package singlink
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -99,6 +98,7 @@ type Server struct {
 	guard   *guard
 
 	revReloadMu sync.Mutex
+	revRejected string // guarded by revReloadMu: last reported failure
 	revMu       sync.RWMutex
 	revoked     revocations
 	revStamp    string
@@ -224,6 +224,11 @@ func (s *Server) Serve(ln net.Listener) error {
 			}()
 		}
 	})
+	if p, ok := s.replay.(ReplayPruner); ok {
+		stopPrune := make(chan struct{})
+		defer close(stopPrune)
+		go s.pruneReplay(p, stopPrune)
+	}
 	if s.cfg.TLS != nil {
 		ln = tls.NewListener(ln, s.cfg.TLS)
 	}
@@ -247,6 +252,25 @@ func (s *Server) Serve(ln net.Listener) error {
 			defer func() { <-s.guard.slots }()
 			s.handle(c)
 		}()
+	}
+}
+
+// pruneReplay erases expired replay marks while the node is serving, so the
+// opaque security state does not outlive its acceptance window on idle nodes.
+func (s *Server) pruneReplay(p ReplayPruner, stop <-chan struct{}) {
+	t := time.NewTicker(replayPruneInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := p.Prune(ctx); err != nil {
+				s.log.Warn("replay state maintenance failed")
+			}
+			cancel()
+		}
 	}
 }
 
@@ -318,8 +342,7 @@ func (s *Server) handle(raw net.Conn) {
 	}
 	// Mark before any destination operation. Store acknowledgement is durable.
 	markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
-	tag := sha256.Sum256(append(append([]byte{}, hs.replayDomain[:]...), hs.E...))
-	fresh, storeErr := s.replay.CheckAndMark(markCtx, tag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
+	fresh, storeErr := s.replay.CheckAndMark(markCtx, hs.replayTag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
 	markTimedOut := markCtx.Err() != nil
 	markCancel()
 	if storeErr != nil || !fresh || markTimedOut {
@@ -556,8 +579,14 @@ func (s *Server) reloadRevoked() error {
 	}
 	s.revReloadMu.Lock()
 	defer s.revReloadMu.Unlock()
+	// A failed update keeps the last good list. It is reported once per
+	// distinct failure, without echoing file content or the path.
 	b, err := readRevocations(s.cfg.RevokedFile)
 	if err != nil {
+		if s.revRejected != "unreadable" {
+			s.revRejected = "unreadable"
+			s.log.Warn("revocation list unreadable; keeping last good list")
+		}
 		return err
 	}
 	stamp := string(hash(b))
@@ -565,12 +594,18 @@ func (s *Server) reloadRevoked() error {
 	same := stamp == s.revStamp
 	s.revMu.RUnlock()
 	if same {
+		s.revRejected = ""
 		return nil
 	}
 	r, err := parseRevocations(b)
 	if err != nil {
+		if s.revRejected != stamp {
+			s.revRejected = stamp
+			s.log.Warn("revocation list update rejected as invalid; keeping last good list")
+		}
 		return err
 	}
+	s.revRejected = ""
 	s.revMu.Lock()
 	s.revoked, s.revStamp = r, stamp
 	s.revMu.Unlock()

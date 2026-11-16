@@ -196,7 +196,8 @@ all bytes read so far.
 7. The token is currently valid and not revoked. Exception: a token that
    expired less than 24 h ago gets an explicit "expired" answer (step 9),
    so the app can tell the user.
-8. The key-domain/`E` tag is atomically and durably marked until its complete
+8. An opaque tag of `E`, keyed with a secret derived from the node key that
+   decrypted the flight, is atomically and durably marked until its complete
    timestamp acceptance window ends; unavailable state rejects the request.
 
 After step 8 the peer is an authenticated user, and the node answers.

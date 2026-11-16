@@ -60,3 +60,10 @@ func testReplayStore(t *testing.T) singlink.ReplayStore {
 	}
 	return s
 }
+
+// auditNodeConfig completes a synthetic test node configuration.
+func auditNodeConfig(t *testing.T, cfg singlink.ServerConfig) singlink.ServerConfig {
+	t.Helper()
+	cfg.ReplayStore = testReplayStore(t)
+	return cfg
+}

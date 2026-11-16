@@ -286,3 +286,47 @@ func TestReplayStoreConcurrentProcesses(t *testing.T) {
 		t.Fatal("cross-process nonce admitted incorrectly")
 	}
 }
+
+func TestReplayStorePruneErasesOnlyExpiredMarks(t *testing.T) {
+	s := replayTestStore(t, 10)
+	now := time.Now().Add(time.Second)
+	s.now = func() time.Time { return now }
+	if ok, err := s.CheckAndMark(context.Background(), replayTag("short"), now.Add(time.Second)); !ok || err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.CheckAndMark(context.Background(), replayTag("long"), now.Add(time.Hour)); !ok || err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	if err := s.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.load()
+	if err != nil || len(snap.entries) != 1 || snap.high != now.UnixNano() {
+		t.Fatal("prune did not erase exactly the expired mark")
+	}
+	if _, ok := snap.entries[replayTag("long")]; !ok {
+		t.Fatal("prune removed an unexpired mark")
+	}
+	now = now.Add(-time.Second)
+	if err := s.Prune(context.Background()); err == nil {
+		t.Fatal("prune ran with the clock behind the watermark")
+	}
+}
+
+func TestReplayTagIsKeyedAndStable(t *testing.T) {
+	k1, _ := GenerateServerKey()
+	k2, _ := GenerateServerKey()
+	E := bytes.Repeat([]byte{0x42}, x25519Len)
+	again, err := ParseServerPrivateKey(k1.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t1 := replayTagFor(k1, E)
+	if t1 != replayTagFor(again, E) {
+		t.Fatal("tag not stable for the same static key")
+	}
+	if t1 == replayTagFor(k2, E) || t1 == sha256.Sum256(E) || bytes.Contains(t1[:], E[:8]) {
+		t.Fatal("tag not keyed to the node static key")
+	}
+}
