@@ -83,9 +83,8 @@ func (e *Engine) stopOwned(c *singlink.Client, matched bool) bool {
 	}
 	e.generation++
 	pending, stop := e.pending, e.stop
+	// Like the original Stop, keep listen/credentials/lastErr for Status.
 	e.pending, e.stop, e.client = nil, nil, nil
-	e.listen, e.user, e.pass, e.lastErr = "", "", "", ""
-	e.since = time.Time{}
 	e.mu.Unlock()
 	if pending != nil {
 		pending.cancel()

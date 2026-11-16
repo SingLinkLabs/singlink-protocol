@@ -11,45 +11,6 @@ import (
 	"time"
 )
 
-// replayCache remembers client ephemeral keys seen inside the timestamp
-// window. Two generations are kept and rotated every window.
-type replayCache struct {
-	mu      sync.Mutex
-	window  time.Duration
-	rotated time.Time
-	cur     map[[32]byte]struct{}
-	prev    map[[32]byte]struct{}
-}
-
-func newReplayCache(window time.Duration) *replayCache {
-	return &replayCache{window: window, rotated: time.Now(), cur: map[[32]byte]struct{}{}, prev: map[[32]byte]struct{}{}}
-}
-
-// checkAndAdd returns false if E was already seen.
-func (rc *replayCache) checkAndAdd(E []byte, now time.Time) bool {
-	var k [32]byte
-	copy(k[:], E)
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	// Entries must live for 2×window (timestamps are accepted ±window).
-	for now.Sub(rc.rotated) >= 2*rc.window {
-		rc.prev, rc.cur = rc.cur, map[[32]byte]struct{}{}
-		rc.rotated = rc.rotated.Add(2 * rc.window)
-		if now.Sub(rc.rotated) >= 4*rc.window {
-			rc.prev = map[[32]byte]struct{}{}
-			rc.rotated = now
-		}
-	}
-	if _, ok := rc.cur[k]; ok {
-		return false
-	}
-	if _, ok := rc.prev[k]; ok {
-		return false
-	}
-	rc.cur[k] = struct{}{}
-	return true
-}
-
 // limiter is a token bucket shared by all connections of one subject.
 type limiter struct {
 	mu     sync.Mutex

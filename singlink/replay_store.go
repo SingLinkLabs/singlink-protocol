@@ -23,6 +23,9 @@ import (
 // and reject time rollback after expiry GC. All instances accepting the same
 // static key (including OldKeys) MUST share the same store/atomic namespace.
 // A host-local mutex or independent per-node files do not meet that contract.
+// expiry is absolute, computed on the node; a store shared by several hosts
+// MUST NOT drop a mark before that instant as seen by any of them (keep clocks
+// synchronized, or retain marks for expiry plus the maximum clock offset).
 type ReplayStore interface {
 	CheckAndMark(context.Context, [32]byte, time.Time) (bool, error)
 }

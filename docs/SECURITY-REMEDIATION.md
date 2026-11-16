@@ -11,10 +11,10 @@ fixes (the cryptographic control test passes on both).
 
 | Finding | Severity | Fix commits | Regression tests | Compatibility notes |
 |---|---|---|---|---|
-| P-01 first-flight replay across restart / instances | Medium | `6a7cd58`, `26c1707`, `b8e6fd7` | `TestAuditP01ReplayRejectedAcrossInstances`, `TestFutureFlightRejectedAcrossRestart`, `TestSharedReplayStoreMixedAcceptanceWindows`, `TestUnsupportedReplayWindowRefusesStartup`, `TestReplayStore*` (restart/capacity, independent instances, concurrent processes, abrupt exit, lock cancellation, GC and clock rollback, missing/corrupt/permissions, opaque content, prune), `TestReplayTagIsKeyedAndStable` | **Breaking for operators:** a node needs `replay_file` (or a `ReplayStore`) provisioned once with `singlink replay-init`; startup fails closed without it. `max_time_skew` above 120 s is refused. Multi-host deployments sharing a key need an external shared atomic store. Library: `NewServer` without a store returns `ErrReplayStore`. |
-| P-02 revocation list partial / non-atomic reload | Medium | `6a7cd58`, `b8e6fd7` | `TestAuditP02OversizedRevocationRetainsLastGood`, `TestAuditP02CorrectedRevocationClosesLiveSession`, `TestRevocationFailuresRetainLastGood`, `TestInvalidInitialRevocationListRefusesStartup` | A configured revocation file that is missing or invalid at startup refuses startup. An invalid update keeps the last good list and logs a warning. A zero-byte or comment-only file is invalid; write `empty` to clear the list. |
+| P-01 first-flight replay across restart / instances | Medium | `6a7cd58`, `26c1707`, `b8e6fd7`, `REVIEWFIX` | `TestAuditP01ReplayRejectedAcrossInstances`, `TestFutureFlightRejectedAcrossRestart`, `TestSharedReplayStoreMixedAcceptanceWindows`, `TestUnsupportedReplayWindowRefusesStartup`, `TestReplayStore*` (restart/capacity, independent instances, concurrent processes, abrupt exit, lock cancellation, GC and clock rollback, missing/corrupt/permissions, opaque content, prune), `TestReplayTagIsKeyedAndStable` | **Breaking for operators:** a node needs `replay_file` (or a `ReplayStore`) provisioned once with `singlink replay-init`; startup fails closed without it. The library `ServerConfig.MaxTimeSkew` above 120 s is refused (the CLI has no such setting). The reference file store handles roughly tens to about a hundred handshakes per second (see below). Multi-host deployments sharing a key need an external shared atomic store. Library: `NewServer` without a store returns `ErrReplayStore`. |
+| P-02 revocation list partial / non-atomic reload | Medium | `6a7cd58`, `b8e6fd7`, `REVIEWFIX` | `TestAuditP02OversizedRevocationRetainsLastGood`, `TestAuditP02CorrectedRevocationClosesLiveSession`, `TestRevocationFailuresRetainLastGood`, `TestInvalidInitialRevocationListRefusesStartup`, `TestRevocationDuringAdmissionClosesSession` | A configured revocation file that is missing or invalid at startup refuses startup. An invalid update keeps the last good list and logs a warning. Stricter format: a zero-byte or comment-only file, lines with extra fields or trailing comments, unknown kinds, lines over 64 KiB and files over 4 MiB are invalid; write `empty` to clear the list. |
 | P-03 NAT64 equivalents bypass custom/local policy | Medium | `6a7cd58`, `627d776` | `TestAuditP03NAT64EquivalentPolicy`, `TestNAT64EquivalentPolicies`, `TestNAT64CachedPolicyIsRechecked` | None. The dial target is unchanged; only `64:ff9b::/96` is translated for policy. |
-| P-04 Stop during pending engine start | Low | `6a7cd58` | `TestAuditP04StopDuringPendingStart`, `TestStopInvalidatesOldTransportCompletion`, `TestStopCancelsPendingHandshake`, `TestOldErrorCannotOverwriteNewLifecycle`, `TestStopClientOwnsPendingAndActiveGeneration` | None for existing callers. A startup cancelled by `Stop` now returns an error (`context.Canceled`). Additive Go API `Engine.StopClient`. C ABI unchanged. |
+| P-04 Stop during pending engine start | Low | `6a7cd58` | `TestAuditP04StopDuringPendingStart`, `TestStopInvalidatesOldTransportCompletion`, `TestStopCancelsPendingHandshake`, `TestOldErrorCannotOverwriteNewLifecycle`, `TestStopClientOwnsPendingAndActiveGeneration` | None for existing callers; `Stop` keeps `Status().Listen`/`LastError` as before. A startup cancelled by `Stop` now returns an error (`context.Canceled`). Additive Go API `Engine.StopClient`. C ABI unchanged. |
 | P-05 early bytes skip the subject rate limit | Medium | `6a7cd58` | `TestAuditP05EarlyBytesShareSubjectBucket`, `TestEarlyPayloadSharesSubjectBudget`, `TestEarlyPayloadUnlimitedAndPartialWrite` | Rate-limited accounts may see the first application bytes wait for their bucket, as already advertised. Unlimited accounts and UDP are unchanged. |
 
 Wire format, KDF, AEAD, token and signature formats are unchanged in all fixes.
@@ -74,6 +74,10 @@ Multi-host/network-filesystem durability is **not validated or supported by this
 backend**. Deployments sharing accepted keys across hosts must provide an
 external `ReplayStore` with a single atomic/durable namespace, correct expiry,
 and clock-rollback safety. An independent local file on each host is not enough.
+Expiry is an absolute time computed by the node (request timestamp + 121 s). A
+shared store must not treat a mark as expired earlier than that instant as seen
+by any node: keep node and store clocks synchronized (NTP) to well under one
+second, or have the store retain marks for `expiry` plus the maximum clock offset.
 
 Every admission rewrites and syncs the snapshot while holding the lock. Lock
 waiting is cancellation-aware; opening/initializing bounds that wait to five
@@ -81,7 +85,15 @@ seconds. Synchronous filesystem I/O cannot be forcibly interrupted; an admission
 that completes durable I/O after cancellation is conservatively rejected while
 retaining its mark.
 This is a correctness-oriented reference backend, not a high-throughput claim.
-Benchmark storage latency/capacity for a deployment before choosing it at scale.
+Every proxied TCP connection or UDP association is a new handshake and one
+admission. The independent review measured about 10 ms per admission with an
+empty store, about 12 ms with 10,000 live marks and about 70 ms with 60,000 on
+macOS/APFS, i.e. roughly 14 to 100 handshakes per second for the whole node.
+Holders of a valid token can use up that budget or the capacity (65,536 marks
+by default, about 4 minutes of admissions), after which admissions fail closed.
+Benchmark storage latency/capacity for a deployment before choosing it at scale,
+and provide a faster external `ReplayStore` for busy nodes. Recently expired
+tokens (which only receive the "expired" status) do not consume replay state.
 
 The bundled systemd example runs as a static system user and declares a private
 persistent `StateDirectory`. Provision replay state once under that identity
@@ -121,7 +133,7 @@ the node is running. A stopped node keeps its last snapshot until it runs again.
 Each update replaces the file by atomic rename; the filesystem may keep freed
 blocks of earlier snapshots until they are reused, so this is logical deletion,
 not secure physical erasure. Abandoned temporary snapshots for the same state
-file are removed on the next successful write. The durable global clock
+file are removed at the start of the next write. The durable global clock
 watermark is preserved through GC; wall-clock rollback below it rejects
 admission/startup until time catches up. Operators must manage clock
 corrections and storage faults as availability events. Do not bypass this by
@@ -140,13 +152,23 @@ not an explicit clear operation. `empty` cannot be mixed with entries. Existing
 valid nonempty token/subject/device lines remain supported. Producers must write
 complete updates through a temporary file and atomic rename; no plaintext parser
 can distinguish a deliberately shortened valid list from an intended larger list.
-Errors do not echo input lines, credential values or private file paths.
-A rejected or unreadable update is logged once per distinct failure as a
+Lines are limited to 64 KiB and the whole file to 4 MiB. Errors do not echo
+input lines, credential values or private file paths. A rejected or unreadable update is logged once per distinct failure as a
 warning ("keeping last good list") so operators notice it.
 
+A handshake re-checks the live list after registering its session, so a list
+published while the handshake was in progress (for example waiting on the replay
+store) still ends that session.
+
 Compatibility: a zero-byte or comment-only revocation file was previously read
-as "no revocations"; it is now invalid (refuses startup, or keeps the last good
-list on reload). Write a file containing `empty` instead.
+as "no revocations", and lines with extra fields or unknown kinds were skipped;
+all of these now make the update invalid (refuses startup, or keeps the last good
+list on reload). Write a file containing `empty` to clear the list.
+
+The revocation file is re-read every 10 seconds from `revoked_file`. Point it at
+a path the service can read directly (for example `/etc/singlink/revoked.txt`);
+systemd `LoadCredential=` copies files only at service start, so updates to a
+credential copy are never seen.
 
 ## Destination policy (P-03)
 
@@ -154,7 +176,11 @@ The original address and supported NAT64-embedded IPv4 equivalent receive the
 same custom CIDR, private/special-use and node-own-address checks, including the
 DNS cache route. The actual dial address is unchanged. Supported translation is
 the well-known `64:ff9b::/96` prefix; network-specific translation prefixes need
-separate configuration/design. Policy-level loopback/synthetic tests do not
+separate configuration/design. With the default policy, the local-use prefix
+`64:ff9b:1::/48` and other special ranges are denied outright. With
+`allow_private` set, IPv4 addresses embedded in network-specific prefixes are not
+matched against `deny_cidrs`; deny those IPv6 prefixes explicitly if a local
+NAT64 translator uses them. Policy-level loopback/synthetic tests do not
 constitute a real NAT64 translator deployment test.
 
 ## Startup cancellation (P-04)

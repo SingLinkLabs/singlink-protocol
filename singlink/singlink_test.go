@@ -499,21 +499,6 @@ func TestReplayIsRejected(t *testing.T) {
 	}
 }
 
-func TestReplayCacheRotation(t *testing.T) {
-	rc := newReplayCache(time.Second)
-	now := time.Now()
-	k := bytes.Repeat([]byte{7}, 32)
-	if !rc.checkAndAdd(k, now) || rc.checkAndAdd(k, now) {
-		t.Fatal("basic replay check")
-	}
-	if rc.checkAndAdd(k, now.Add(3*time.Second)) {
-		t.Fatal("entry expired too early")
-	}
-	if !rc.checkAndAdd(k, now.Add(10*time.Second)) {
-		t.Fatal("entry never expired")
-	}
-}
-
 func TestConcurrentStreams(t *testing.T) {
 	e := newEnv(t, envOpt{tls: true})
 	echo := echoServer(t, "")

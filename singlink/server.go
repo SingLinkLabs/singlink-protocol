@@ -341,13 +341,17 @@ func (s *Server) handle(raw net.Conn) {
 		return
 	}
 	// Mark before any destination operation. Store acknowledgement is durable.
-	markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
-	fresh, storeErr := s.replay.CheckAndMark(markCtx, hs.replayTag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
-	markTimedOut := markCtx.Err() != nil
-	markCancel()
-	if storeErr != nil || !fresh || markTimedOut {
-		fail(errProbe)
-		return
+	// A recently expired token only ever gets the "expired" status (no
+	// destination operation), so it does not consume replay state.
+	if !expired {
+		markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
+		fresh, storeErr := s.replay.CheckAndMark(markCtx, hs.replayTag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
+		markTimedOut := markCtx.Err() != nil
+		markCancel()
+		if storeErr != nil || !fresh || markTimedOut {
+			fail(errProbe)
+			return
+		}
 	}
 	raw.SetReadDeadline(time.Time{})
 	s.guard.end(ip)
@@ -405,6 +409,16 @@ func (s *Server) handle(raw net.Conn) {
 		delete(s.sessions, sess)
 		s.sessMu.Unlock()
 	}()
+	// Re-check now that the session is registered: a reload that published a
+	// new list after the first check (for example while the replay store was
+	// busy) either is seen here or sees this session when it closes revoked
+	// ones, because it publishes the list before walking the sessions.
+	s.revMu.RLock()
+	revoked := s.revoked.has(tok)
+	s.revMu.RUnlock()
+	if revoked {
+		return
+	}
 
 	if hs.req.cmd == CmdUDP {
 		s.serveUDP(ctx, conn, lim, reject)

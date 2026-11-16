@@ -6,7 +6,9 @@ Wants=network-online.target
 [Service]
 # server.json (it holds the node private key) stays root-only at
 # /etc/singlink/server.json (chmod 600); systemd hands a private copy to the
-# service. TLS files and revoked.txt are passed the same way.
+# service. TLS files are passed the same way. Credentials are copied only at
+# start, so point revoked_file at a readable path such as
+# /etc/singlink/revoked.txt (it is re-read every 10 s), not a credential.
 LoadCredential=server.json:/etc/singlink/server.json
 LoadCredential=fullchain.pem:/etc/singlink/fullchain.pem
 LoadCredential=privkey.pem:/etc/singlink/privkey.pem
