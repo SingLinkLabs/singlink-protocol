@@ -157,11 +157,28 @@ func TestReplayStoreMissingCorruptAndPermissionsFailClosed(t *testing.T) {
 		t.Fatal("invalid count accepted")
 	}
 	os.WriteFile(s.path, good, 0600)
-	os.Chmod(s.path, 0644)
+	exposeReplayPath(t, s.path)
 	if _, err := OpenFileReplayStore(s.path, 10); err == nil {
 		t.Fatal("public state permissions accepted")
 	}
-	os.Chmod(s.path, 0600)
+	restrictReplayPath(t, s.path)
+	if _, err := OpenFileReplayStore(s.path, 10); err != nil {
+		t.Fatal("restored private state rejected")
+	}
+	exposeReplayPath(t, s.path+".lock")
+	if ok, err := s.CheckAndMark(context.Background(), replayTag("x"), time.Now().Add(time.Minute)); ok || err == nil {
+		t.Fatal("public lock file accepted")
+	}
+	restrictReplayPath(t, s.path+".lock")
+	dir := filepath.Dir(s.path)
+	exposeReplayPath(t, dir)
+	if _, err := OpenFileReplayStore(s.path, 10); err == nil {
+		t.Fatal("public state directory accepted")
+	}
+	restrictReplayPath(t, dir)
+	if _, err := OpenFileReplayStore(s.path, 10); err != nil {
+		t.Fatal("restored private directory rejected")
+	}
 	os.Remove(s.path)
 	if _, err := OpenFileReplayStore(s.path, 10); err == nil {
 		t.Fatal("missing state silently rebuilt")
@@ -184,10 +201,9 @@ func TestReplayStoreContainsOnlyOpaqueSecurityState(t *testing.T) {
 	if len(b) != replayHeaderSize+40+sha256.Size || bytes.Contains(b, raw) {
 		t.Fatal("unexpected state content")
 	}
-	st, _ := os.Stat(s.path)
-	if st.Mode().Perm() != 0600 {
-		t.Fatal("state permissions changed")
-	}
+	assertReplayPathPrivate(t, s.path)
+	assertReplayPathPrivate(t, s.path+".lock")
+	assertReplayPathPrivate(t, filepath.Dir(s.path))
 }
 
 func TestReplayStoreSurvivesAbruptProcessExit(t *testing.T) {

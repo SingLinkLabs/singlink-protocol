@@ -47,8 +47,8 @@ const replayHeaderSize = 20
 
 var replayMagic = []byte("SLRPLY01")
 
-// FileReplayStore is a reference local-filesystem store for supported Unix hosts.
-// Processes on one host may share a path. Network filesystems/multi-host storage
+// FileReplayStore is a reference local-filesystem store for supported Unix and
+// Windows hosts. Processes on one host may share a path. Network filesystems/multi-host storage
 // are not supported: provide an external ReplayStore meeting the full contract.
 // Each admission rewrites/fsyncs a bounded snapshot; size for the handshake load.
 // The snapshot holds only opaque tag/expiry pairs and a global clock watermark.
@@ -76,7 +76,7 @@ func InitializeReplayFile(path string, maxEntries int) (*FileReplayStore, error)
 	if err != nil || path == "" {
 		return nil, ErrReplayStore
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := makeReplayDir(filepath.Dir(path)); err != nil {
 		return nil, ErrReplayStore
 	}
 	if _, err := os.Lstat(path + ".lock"); !os.IsNotExist(err) {
@@ -130,8 +130,9 @@ type replaySnapshot struct {
 
 func (s *FileReplayStore) lock(ctx context.Context) (func(), error) {
 	// Only a private directory is supported. Do not follow symlinks for state.
-	st, err := os.Lstat(filepath.Dir(s.path))
-	if err != nil || !st.IsDir() || st.Mode().Perm()&0077 != 0 || !replayOwnerOK(st) {
+	dir := filepath.Dir(s.path)
+	st, err := os.Lstat(dir)
+	if err != nil || !st.IsDir() || !replayPrivate(dir, st) {
 		return nil, ErrReplayStore
 	}
 	return lockReplayFile(ctx, s.path+".lock")
@@ -140,7 +141,7 @@ func (s *FileReplayStore) lock(ctx context.Context) (func(), error) {
 func (s *FileReplayStore) load() (replaySnapshot, error) {
 	empty := replaySnapshot{}
 	st, err := os.Lstat(s.path)
-	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 || !replayOwnerOK(st) {
+	if err != nil || !st.Mode().IsRegular() || !replayPrivate(s.path, st) {
 		return empty, ErrReplayStore
 	}
 	if st.Size() < replayHeaderSize+sha256.Size || st.Size() > int64(replayHeaderSize+s.limit*40+sha256.Size) {
@@ -209,11 +210,12 @@ func (s *FileReplayStore) save(snap replaySnapshot) error {
 	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), tempPrefix) {
+			full := filepath.Join(filepath.Dir(s.path), entry.Name())
 			info, err := entry.Info()
-			if err != nil || !info.Mode().IsRegular() || !replayOwnerOK(info) || info.Mode().Perm()&0077 != 0 {
+			if err != nil || !info.Mode().IsRegular() || !replayPrivate(full, info) {
 				return ErrReplayStore
 			}
-			if err := os.Remove(filepath.Join(filepath.Dir(s.path), entry.Name())); err != nil {
+			if err := os.Remove(full); err != nil {
 				return ErrReplayStore
 			}
 		}
@@ -224,6 +226,11 @@ func (s *FileReplayStore) save(snap replaySnapshot) error {
 	}
 	temp := f.Name()
 	defer os.Remove(temp)
+	// The new snapshot must be private before any state is written to it.
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() || !replayPrivate(temp, st) {
+		f.Close()
+		return ErrReplayStore
+	}
 	if _, err = f.Write(b); err == nil {
 		err = f.Sync()
 	}
@@ -231,16 +238,9 @@ func (s *FileReplayStore) save(snap replaySnapshot) error {
 	if err != nil || closeErr != nil {
 		return ErrReplayStore
 	}
-	if err := os.Rename(temp, s.path); err != nil {
-		return ErrReplayStore
-	}
-	dir, err := os.Open(filepath.Dir(s.path))
-	if err != nil {
-		return ErrReplayStore
-	}
-	err = dir.Sync()
-	closeErr = dir.Close()
-	if err != nil || closeErr != nil {
+	// Atomic same-directory replacement (rename + directory fsync on Unix;
+	// write-through MoveFileEx on Windows, see replay_lock_windows.go).
+	if err := replaceReplayFile(temp, s.path); err != nil {
 		return ErrReplayStore
 	}
 	return nil
