@@ -193,13 +193,16 @@ func (e *Engine) Status() Status {
 	return st
 }
 
+// exitIPURL answers with the caller's public IP address as plain text.
+var exitIPURL = "https://api.ipify.org"
+
 // ExitIP returns the public IP address websites see through the tunnel.
 func (e *Engine) ExitIP(timeout time.Duration) (string, error) {
 	hc, err := e.httpClient(timeout)
 	if err != nil {
 		return "", err
 	}
-	resp, err := hc.Get("https://api.ipify.org")
+	resp, err := hc.Get(exitIPURL)
 	if err != nil {
 		return "", err
 	}

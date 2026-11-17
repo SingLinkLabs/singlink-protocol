@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -48,45 +49,96 @@ Usage:
 Run "singlink <command> -h" for flags.
 `
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+// Output streams and process hooks; tests replace them.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+	// waitSignal blocks until the process is asked to stop.
+	waitSignal = func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+		<-ch
+		signal.Stop(ch)
+	}
+	// serve runs a configured node on ln until the listener closes.
+	serve = func(srv *singlink.Server, ln net.Listener) error { return srv.Serve(ln) }
+)
+
+func main() { os.Exit(run(os.Args[1:])) }
+
+// usageError is a command-line syntax error: exit status 2, like the flag
+// package. The flag package has already printed the details.
+type usageError struct{ error }
+
+// parseFlags parses args with fs, reporting problems on stderr.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return err
+		}
+		return usageError{err}
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "unexpected argument %q\n", fs.Arg(0))
+		return usageError{errors.New("unexpected argument")}
+	}
+	return nil
+}
+
+// run executes one command and returns the process exit status.
+func run(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprint(stderr, usage)
+		return 2
 	}
 	var err error
-	args := os.Args[2:]
-	switch os.Args[1] {
+	rest := args[1:]
+	switch args[0] {
 	case "keygen":
-		err = keygen(args)
+		err = keygen(rest)
 	case "token":
-		err = token(args)
+		err = token(rest)
 	case "link":
-		err = link(args)
+		err = link(rest)
 	case "replay-init":
-		err = replayInit(args)
+		err = replayInit(rest)
 	case "server":
-		err = server(args)
+		err = server(rest)
 	case "client":
-		err = client(args)
+		err = client(rest)
 	case "demo":
-		err = demo(args)
+		err = demo(rest)
 	case "version", "-v", "--version":
-		fmt.Println(singlink.Version, singlink.ProtocolName)
-		fmt.Println(singlink.Attribution)
-		fmt.Println("Copyright 2026 SingLinkVPN · Apache-2.0")
+		printVersion(stdout)
+	case "help", "-h", "--help":
+		fmt.Fprint(stdout, usage)
 	default:
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		fmt.Fprint(stderr, usage)
+		return 2
 	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+	var ue usageError
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+		return 0
+	case errors.As(err, &ue):
+		return 2
+	default:
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
 	}
+}
+
+func printVersion(w io.Writer) {
+	fmt.Fprintln(w, singlink.Version, singlink.ProtocolName)
+	fmt.Fprintln(w, singlink.Attribution)
+	fmt.Fprintln(w, "Copyright 2026 SingLinkVPN · Apache-2.0")
+	fmt.Fprintf(w, "Specification draft %d. Drafts are not wire compatible with each other: upgrade nodes, clients and native libraries together.\n", singlink.SpecDraft)
 }
 
 func printJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(b))
+	fmt.Fprintln(stdout, string(b))
 }
 
 func keygen(args []string) error {
@@ -156,7 +208,7 @@ func token(args []string) error {
 		printJSON(tokenJSON(t))
 		return nil
 	case "issue":
-		fs := flag.NewFlagSet("token issue", flag.ExitOnError)
+		fs := flag.NewFlagSet("token issue", flag.ContinueOnError)
 		issuerSeed := fs.String("issuer", "", "issuer seed (base64url)")
 		devicePub := fs.String("device", "", "device public key (base64url)")
 		subject := fs.String("subject", "", "subject id, 32 hex chars (random if empty)")
@@ -165,7 +217,15 @@ func token(args []string) error {
 		rate := fs.Uint("rate", 0, "rate limit in kbit/s (0 = unlimited)")
 		maxConns := fs.Uint("max-conns", 0, "max concurrent connections (0 = unlimited)")
 		plan := fs.Uint("plan", 0, "plan id")
-		fs.Parse(args[1:])
+		if err := parseFlags(fs, args[1:]); err != nil {
+			return err
+		}
+		if *rate > 1<<32-1 || *maxConns > 1<<16-1 || *plan > 255 {
+			return errors.New("-rate, -max-conns or -plan out of range")
+		}
+		if !(*days > 0 && *days <= 3650) {
+			return errors.New("-days must be more than 0 and at most 3650")
+		}
 		seed, err := singlink.B64.DecodeString(*issuerSeed)
 		if err != nil {
 			return errors.New("bad -issuer")
@@ -201,7 +261,7 @@ func token(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(singlink.B64.EncodeToString(raw))
+		fmt.Fprintln(stdout, singlink.B64.EncodeToString(raw))
 		return nil
 	}
 	return errors.New("usage: singlink token issue|inspect")
@@ -224,7 +284,7 @@ func tokenJSON(t *singlink.Token) map[string]any {
 }
 
 func link(args []string) error {
-	fs := flag.NewFlagSet("link", flag.ExitOnError)
+	fs := flag.NewFlagSet("link", flag.ContinueOnError)
 	server := fs.String("server", "", "node host:port")
 	pk := fs.String("pk", "", "node public key (base64url)")
 	tok := fs.String("token", "", "token (base64url)")
@@ -233,7 +293,9 @@ func link(args []string) error {
 	sni := fs.String("sni", "", "TLS server name")
 	pin := fs.String("pin", "", "certificate SHA-256 pin (base64url)")
 	name := fs.String("name", "", "display name")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	p := &singlink.Profile{Name: *name, Server: *server, Transport: *tr, SNI: *sni}
 	var err error
 	b, err := singlink.B64.DecodeString(*pk)
@@ -262,7 +324,7 @@ func link(args []string) error {
 	if _, err := singlink.ParseLink(l); err != nil {
 		return err
 	}
-	fmt.Println(l)
+	fmt.Fprintln(stdout, l)
 	return nil
 }
 
@@ -298,7 +360,7 @@ func replayInit(args []string) error {
 	fs := flag.NewFlagSet("replay-init", flag.ContinueOnError)
 	path := fs.String("path", "", "NEW replay state path (never reset while its keys are accepted)")
 	capacity := fs.Int("max-entries", 0, "bounded replay capacity (0 = 65536)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *path == "" {
@@ -309,26 +371,49 @@ func replayInit(args []string) error {
 }
 
 func server(args []string) error {
-	fs := flag.NewFlagSet("server", flag.ExitOnError)
+	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	path := fs.String("c", "server.json", "config file (systemd: $CREDENTIALS_DIRECTORY/server.json)")
-	fs.Parse(args)
-	b, err := os.ReadFile(*path)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	cfg, listen, err := loadServerConfig(*path)
 	if err != nil {
 		return err
+	}
+	srv, err := singlink.NewServer(cfg)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	cfg.Logger.Info("SingLink node starting", "attribution", singlink.Attribution)
+	cfg.Logger.Info("SingLink node listening", "addr", ln.Addr().String(), "tls", cfg.TLS != nil, "issuers", len(cfg.Issuers), "draft", singlink.SpecDraft)
+	return serve(srv, ln)
+}
+
+// loadServerConfig reads and validates a node configuration file. It returns
+// the library configuration and the listen address.
+func loadServerConfig(path string) (singlink.ServerConfig, string, error) {
+	var cfg singlink.ServerConfig
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, "", err
 	}
 	var f serverFile
 	if err := json.Unmarshal(b, &f); err != nil {
-		return err
+		return cfg, "", fmt.Errorf("config: %w", err)
 	}
 	key, err := parseServerKey(f.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("private_key: %w", err)
+		return cfg, "", fmt.Errorf("private_key: %w", err)
 	}
 	var old []*singlink.ServerPrivateKey
 	for i, k := range f.OldPrivateKeys {
 		ok, err := parseServerKey(k)
 		if err != nil {
-			return fmt.Errorf("old_private_keys[%d]: %w", i, err)
+			return cfg, "", fmt.Errorf("old_private_keys[%d]: %w", i, err)
 		}
 		old = append(old, ok)
 	}
@@ -336,15 +421,15 @@ func server(args []string) error {
 	for _, c := range f.DenyCIDRs {
 		p, err := netip.ParsePrefix(c)
 		if err != nil {
-			return fmt.Errorf("deny_cidrs: %w", err)
+			return cfg, "", fmt.Errorf("deny_cidrs: %w", err)
 		}
 		deny = append(deny, p)
 	}
 	var pubs []ed25519.PublicKey
-	for _, s := range f.Issuers {
+	for i, s := range f.Issuers {
 		p, err := singlink.B64.DecodeString(s)
 		if err != nil || len(p) != ed25519.PublicKeySize {
-			return fmt.Errorf("bad issuer key %q", s)
+			return cfg, "", fmt.Errorf("issuers[%d]: bad issuer public key", i)
 		}
 		pubs = append(pubs, p)
 	}
@@ -352,59 +437,45 @@ func server(args []string) error {
 	if f.LogLevel == "debug" {
 		lvl = slog.LevelDebug
 	}
-	cfg := singlink.ServerConfig{
+	cfg = singlink.ServerConfig{
 		ReplayFile: f.ReplayFile, ReplayMaxEntries: f.ReplayMaxEntries, Key: key, OldKeys: old, Issuers: singlink.NewIssuers(pubs...),
 		Fallback: f.Fallback, FallbackProxyProtocol: f.FallbackProxyProtocol,
 		AllowPrivate: f.AllowPrivate, DenyCIDRs: deny, BlockedPorts: f.BlockedPorts, AllowSMTP: f.AllowSMTP,
 		MaxConnections: f.MaxConnections, RevokedFile: f.RevokedFile,
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})),
+		Logger: slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: lvl})),
 	}
-	if f.TLSCert != "" {
+	if f.TLSCert != "" || f.TLSKey != "" {
 		cert, err := tls.LoadX509KeyPair(f.TLSCert, f.TLSKey)
 		if err != nil {
-			return err
+			return cfg, "", fmt.Errorf("tls_cert/tls_key: %w", err)
 		}
 		cfg.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
-	}
-	srv, err := singlink.NewServer(cfg)
-	if err != nil {
-		return err
 	}
 	if f.Listen == "" {
 		f.Listen = ":443"
 	}
-	ln, err := net.Listen("tcp", f.Listen)
-	if err != nil {
-		return err
-	}
-	cfg.Logger.Info("SingLink node starting", "attribution", singlink.Attribution)
-	cfg.Logger.Info("SingLink node listening", "addr", ln.Addr().String(), "tls", cfg.TLS != nil, "issuers", len(pubs))
-	return srv.Serve(ln)
+	return cfg, f.Listen, nil
 }
 
 // logAttribution writes the required attribution (NOTICE) once when a
 // client or demo starts. Derivative works must keep it.
 func logAttribution() {
-	fmt.Fprintln(os.Stderr, singlink.Attribution)
-}
-
-func waitSignal() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	<-ch
+	fmt.Fprintln(stderr, singlink.Attribution)
 }
 
 func client(args []string) error {
-	fs := flag.NewFlagSet("client", flag.ExitOnError)
+	fs := flag.NewFlagSet("client", flag.ContinueOnError)
 	l := fs.String("link", "", "singlink:// link")
 	listen := fs.String("listen", "127.0.0.1:1080", "local SOCKS5 address")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	logAttribution()
 	var e engine.Engine
 	if err := e.Start(*l, *listen); err != nil {
 		return err
 	}
-	fmt.Println("SOCKS5 proxy on", e.Status().Listen)
+	fmt.Fprintln(stdout, "SOCKS5 proxy on", e.Status().Listen)
 	waitSignal()
 	e.Stop()
 	return nil
@@ -413,11 +484,13 @@ func client(args []string) error {
 // demo runs a node with a self-signed certificate on loopback, issues a
 // token and starts a client, so the whole stack can be tried on one machine.
 func demo(args []string) error {
-	fs := flag.NewFlagSet("demo", flag.ExitOnError)
+	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	listen := fs.String("listen", "127.0.0.1:1080", "local SOCKS5 address")
 	nodeAddr := fs.String("node", "127.0.0.1:8443", "address for the demo node")
 	linkOnly := fs.Bool("link-only", false, "run only the node and print a link for another client (e.g. the Flutter app)")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	logAttribution()
 
 	key, _ := singlink.GenerateServerKey()
@@ -454,6 +527,7 @@ func demo(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer ln.Close()
 	go srv.Serve(ln)
 
 	t := &singlink.Token{DevicePub: device.Public().(ed25519.PublicKey), NotBefore: time.Now().Add(-time.Minute),
@@ -465,11 +539,11 @@ func demo(args []string) error {
 	}
 	p := &singlink.Profile{Name: "SingLink local demo node", Server: ln.Addr().String(), Transport: "tls", SNI: "singlink-demo.local",
 		Pin: pin, ServerKey: key.Public(), Token: raw, Device: device}
-	fmt.Println("node:", ln.Addr().String(), "(TLS 1.3, pinned self-signed certificate)")
-	fmt.Println("link:")
-	fmt.Println(p.Link())
+	fmt.Fprintln(stdout, "node:", ln.Addr().String(), "(TLS 1.3, pinned self-signed certificate)")
+	fmt.Fprintln(stdout, "link:")
+	fmt.Fprintln(stdout, p.Link())
 	if *linkOnly {
-		fmt.Println("\nnode running; paste the link into a client. Ctrl+C to stop.")
+		fmt.Fprintln(stdout, "\nnode running; paste the link into a client. Ctrl+C to stop.")
 		waitSignal()
 		return nil
 	}
@@ -477,7 +551,7 @@ func demo(args []string) error {
 	if err := e.Start(p.Link(), *listen); err != nil {
 		return err
 	}
-	fmt.Println("\nSOCKS5 proxy on", e.Status().Listen, "— try: curl -x socks5h://"+e.Status().Listen+" https://www.gstatic.com/generate_204 -i")
+	fmt.Fprintln(stdout, "\nSOCKS5 proxy on", e.Status().Listen, "— try: curl -x socks5h://"+e.Status().Listen+" https://www.gstatic.com/generate_204 -i")
 	waitSignal()
 	e.Stop()
 	return nil
