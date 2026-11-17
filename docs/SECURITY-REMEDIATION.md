@@ -17,7 +17,12 @@ fixes (the cryptographic control test passes on both).
 | P-04 Stop during pending engine start | Low | `6a7cd58` | `TestAuditP04StopDuringPendingStart`, `TestStopInvalidatesOldTransportCompletion`, `TestStopCancelsPendingHandshake`, `TestOldErrorCannotOverwriteNewLifecycle`, `TestStopClientOwnsPendingAndActiveGeneration` | None for existing callers; `Stop` keeps `Status().Listen`/`LastError` as before. A startup cancelled by `Stop` now returns an error (`context.Canceled`). Additive Go API `Engine.StopClient`. C ABI unchanged. |
 | P-05 early bytes skip the subject rate limit | Medium | `6a7cd58` | `TestAuditP05EarlyBytesShareSubjectBucket`, `TestEarlyPayloadSharesSubjectBudget`, `TestEarlyPayloadUnlimitedAndPartialWrite` | Rate-limited accounts may see the first application bytes wait for their bucket, as already advertised. Unlimited accounts and UDP are unchanged. |
 
-Wire format, KDF, AEAD, token and signature formats are unchanged in all fixes.
+Scope of the next statement: the five fixes above (commits `6a7cd58`,
+`26c1707`, `b8e6fd7`, `24b6b19`, `627d776`). Within that remediation set the
+wire format, KDF, AEAD, token and signature formats are unchanged. It does
+**not** describe spec draft 4 (commit `ddfd0d7`), a separate change that
+replaced `IDENT` and therefore every derived handshake key; draft 3 and draft 4
+peers do not interoperate. See [Draft 4 compatibility](#draft-4-compatibility).
 
 ## Required replay-state migration (P-01)
 
@@ -62,14 +67,42 @@ initializer refuses existing state or an existing lock/initialization marker.
 
 The included reference file store uses a stable sidecar `flock`, bounded binary
 snapshot, private directory/file ownership and permissions, file `fsync`, atomic
-same-directory rename, and directory `fsync`. Admission is acknowledged only
-after durable commit and a final cancellation check. Processes on **one Unix
-host** may share the same path. Keep the snapshot and lock on a local filesystem
+same-directory rename, and directory `fsync` (Windows equivalents below).
+Admission is acknowledged only after durable commit and a final cancellation
+check. Processes on **one host** may share the same path. Keep the snapshot and lock on a local filesystem
 that provides these guarantees. Do not delete/replace the stable lock file.
 
-The file backend supports Linux, Darwin and the selected BSD targets in its
-build constraints. Unsupported platforms, including the Windows reference
-server backend, fail closed. Client/FFI builds retain the same API/ABI.
+The file backend supports Linux, Darwin, the selected BSD targets and (since
+the 2026-11-17 re-audit follow-up) Windows; other platforms fail closed.
+Client/FFI builds retain the same API/ABI.
+
+On Windows the same contract is implemented with the standard library only:
+an exclusive `LockFileEx` lock on the same stable sidecar `.lock` file (held
+per handle, released by `UnlockFileEx` and by the system if the process dies);
+privacy checked on the owner and DACL of the directory, lock, state and
+temporary files (owner must be the service account, SYSTEM or Administrators;
+the DACL may grant access only to those and OWNER RIGHTS; a NULL DACL or any
+other grant fails closed, the Windows counterpart of the 0700/0600 rule); a
+directory that `replay-init` creates gets exactly that protected DACL, which
+its files inherit; the flushed temporary snapshot (checked to be private
+before it is written) replaces the state with
+`MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` (a retry of
+at most half a second, under the store lock, absorbs sharing violations from
+scanners; anything else fails closed). Windows has no portable directory
+`fsync`: the snapshot data is flushed before the rename and NTFS journals the
+rename, but the durability of the rename itself across a power loss is not
+something the standard library can force or this project has tested. A
+process restart is covered regardless, because flights stamped before a node
+process started are refused.
+
+Run `singlink replay-init` as the account the node service runs as, because
+the directory it creates grants only that account, SYSTEM and Administrators.
+For a service running as LocalSystem, initialize from an elevated context
+running as SYSTEM; for a virtual service account (`NT SERVICE\...`), create
+the directory yourself with an equivalent protected DACL for that account
+(for example with `icacls`), then run `replay-init` for the file path. An
+existing directory is never re-permissioned. Use a local NTFS volume; network
+shares and multi-host storage are not supported, as on Unix.
 Multi-host/network-filesystem durability is **not validated or supported by this
 backend**. Deployments sharing accepted keys across hosts must provide an
 external `ReplayStore` with a single atomic/durable namespace, correct expiry,
@@ -92,8 +125,53 @@ macOS/APFS, i.e. roughly 14 to 100 handshakes per second for the whole node.
 Holders of a valid token can use up that budget or the capacity (65,536 marks
 by default, about 4 minutes of admissions), after which admissions fail closed.
 Benchmark storage latency/capacity for a deployment before choosing it at scale,
-and provide a faster external `ReplayStore` for busy nodes. Recently expired
-tokens (which only receive the "expired" status) do not consume replay state.
+and provide a faster external `ReplayStore` for busy nodes.
+
+### Admission order: refusals never use the store
+
+Since the 2026-11-17 re-audit follow-up, every refusal that follows from the
+authenticated request, the token and the node configuration alone is decided
+**before** the durable store: recently expired token, unknown command,
+capability not granted (for example UDP on a TCP-only token) and a TCP
+destination refused by the configured policy because of its port or an IP
+literal (`deny_cidrs`, special-purpose ranges unless `allow_private`). These
+flights receive only their status, perform no destination operation and never
+call `CheckAndMark`, so a valid-token holder cannot fill the store's capacity
+or spend its I/O budget with refused requests, and cannot block other
+subjects that way. The re-audit's control (one permitted and two
+capability-denied flights against a 3-slot store, then another subject) is
+the regression test `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`.
+
+Replay resistance of these answers is kept without the durable store: each
+process keeps the same opaque tag for each status-only answer in a bounded
+in-memory set (32,768 tags per process, at most 256 per subject so one account
+cannot crowd out the others) until its timestamp window ends. A replayed copy
+sent to the same process goes to the fallback like any other replay; when the
+set or the subject's share is full, further refusals get no answer at all (the
+fallback, without counting against the client address); and a tag in the set
+is also treated as a replay by the durable path. Flights stamped before the
+process started are already refused, so a restart does not reopen that window.
+
+Limits of this design, stated plainly:
+
+- The set is per process. Another process or host that accepts the same keys
+  can answer a replayed copy of a refused flight once more, with the same
+  status and without any destination operation. Replaying an inner first
+  flight requires seeing it (raw `tcp` transport, a TLS-terminating proxy or
+  CDN, or an accepted interception), and such an observer has already seen the
+  original answer.
+- All processes and hosts that accept the same keys **must** use the same
+  destination policy (`allow_private`, `deny_cidrs`, `blocked_ports`,
+  `allow_smtp`). Refusals leave no durable mark, so if one instance refuses a
+  flight and another would allow it, a replayed copy sent to the permissive
+  instance would be executed once. Roll policy changes out to all instances
+  sharing keys together (or rotate keys with the change).
+
+Still decided after the durable mark, because they depend on host or
+per-subject state: name resolution (status 7), the node's own interface
+addresses, and the per-subject connection limit (status 6). Permitted
+requests of a valid token still consume one mark each, as intended; bound
+authenticated admission rates and monitor capacity for busy nodes.
 
 The bundled systemd example runs as a static system user and declares a private
 persistent `StateDirectory`. Provision replay state once under that identity
@@ -204,9 +282,54 @@ billing, total-byte statistics, encryption or signatures had been bypassed.
 
 ## Compatibility and remaining platform validation
 
-Wire identifiers, KDF, AEAD, signature input and frame encoding are unchanged.
+Within the remediation set listed at the top of this document, wire
+identifiers, KDF, AEAD, signature input and frame encoding are unchanged.
+Spec draft 4 (`ddfd0d7`) is a separate change that replaced `IDENT` and so
+every derived key; see [Draft 4 compatibility](#draft-4-compatibility).
 Operational startup/revocation configuration is stricter as documented above.
 Cross-host store deployment, real NAT64 translator routing, hardware power-loss
 behavior, target-device runtime and production throughput require their own
 platform/deployment validation. Local synthetic regression, race and build results
 must be reported separately, without using real credentials or private nodes.
+
+## Draft 4 compatibility
+
+The 2026-11-17 re-audit (P-R01, informational) noted that the statements
+"unchanged" above were broader than intended. They apply to the remediation
+commits only. Spec draft 4 changed `IDENT` from
+`SingLink/1 by SingLinkLabs (singlinkvpn.com)` to
+`SingLink/1 by SingLinkVPN (singlinkvpn.com)`. The HKDF-SHA-256 and
+AES-256-GCM algorithms, the X25519 + ML-KEM-768 exchange, the wire layout,
+the wire version byte (`0x01`), tokens, links and replay state are the same;
+every handshake key derived from `IDENT` is different.
+
+| Node \ client (or native library) | Draft 3 client | Draft 4 client |
+|---|---|---|
+| **Draft 3 node** | works | silent fallback on the node; client reports "handshake rejected: possible protocol draft mismatch or wrong server key" |
+| **Draft 4 node** | silent fallback on the node; a draft 3 client reports its older generic rejection | works |
+
+Upgrade nodes, apps and native libraries together (the app pins the protocol
+commit). There is deliberately no version negotiation and no plaintext or
+older-draft fallback: a mismatched flight is indistinguishable from any other
+probe and gets the same fallback treatment, so the mismatch cannot be used to
+identify a node. The diagnostics live on the client only: `ErrRejected` now
+names the likely causes, a reply that cannot be authenticated as a STATUS
+frame under the handshake keys is reported the same way, and the draft is
+available as `singlink.SpecDraft`, in `singlink version` and in the `draft`
+field of the FFI `SingLinkVersion` result. Regression tests:
+`TestDraft3FlightGoesToFallbackUnchanged`,
+`TestClientReportsDraftOrKeyMismatch`, `TestDraftConstantsAndDiagnostic`.
+
+## 2026-11-17 re-audit follow-up
+
+| Item | Change | Tests |
+|---|---|---|
+| P-R01 draft 4 wording | Scoped the "unchanged" statements; upgrade matrix here, in SPEC §10 and the README; client mismatch diagnostic; node behaviour unchanged | `TestDraft*`, `TestClientReportsDraftOrKeyMismatch` |
+| Authenticated refusals and replay capacity (section 6) | Stateless refusals decided before `CheckAndMark`; per-process status-only replay set with a per-subject share | `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`, `TestRefusedFlightReplaysGoToFallback`, `TestRefusedReplayAcrossProcessesNeverExecutes`, `TestRefusalFloodDoesNotSilenceOtherSubjects`, `TestStatusOnlyMarkBlocksLaterAdmission`, `TestNoDestinationOperationBeforeReplayCheck`, `TestPreAdmissionIsConfigOnly`, `TestStatusMarksBoundedAndExpiring` |
+| Windows (section 8, 29 pass / 43 fail baseline) | Windows `FileReplayStore` backend (LockFileEx, DACL checks, write-through replace); CI runs the full suite on Windows | `TestReplayStore*` on every OS, `TestPrivateACLPolicy` |
+| Coverage | CLI made testable. Visible changes: range checks on `-rate`, `-max-conns`, `-plan` (values that used to wrap silently, for example a rate of 2^32 becoming "unlimited") and `-days`; exit status 2 for unexpected arguments; a `help` command; one extra `version` line naming the spec draft; `tls_key` without `tls_cert` is now an error instead of being ignored. Engine tests | `cmd/singlink`, `engine` |
+| CI | GitHub Actions: gofmt, vet (also cross-compiled), `go test -race` on Linux and macOS, `go test` on Windows, 60 s fuzz smoke per target; actions pinned by SHA, read-only token | `.github/workflows/ci.yml` |
+
+Still outside what this repository can demonstrate: a real NAT64 translator
+path, a multi-host shared `ReplayStore`, physical power-loss behaviour of the
+file store (Unix or Windows) and production throughput.

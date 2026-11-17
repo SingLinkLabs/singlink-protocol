@@ -168,5 +168,21 @@ durable; there is no memory-only fallback. Existing node configurations must add
 before startup. Never reset it while its keys remain accepted. Nodes on different
 hosts that accept the same key must share one external atomic store (or simply
 use one key per host). See [the remediation and deployment contract](docs/SECURITY-REMEDIATION.md)
-for same-host sharing, unsupported multi-host file storage, Windows server-backend
-limits, clock/GC behavior and the explicit `empty` revocation-list format.
+for same-host sharing, unsupported multi-host file storage, the Windows backend,
+clock/GC behavior and the explicit `empty` revocation-list format.
+
+## Upgrading between spec drafts
+
+Spec draft 4 changed the handshake identifier `IDENT`, so every derived key
+differs from draft 3 although the wire layout and version byte (`0x01`) did
+not change. There is no version negotiation and no plaintext fallback.
+Upgrade nodes, apps and native libraries together:
+
+| Node \ client (or native library) | Draft 3 client | Draft 4 client |
+|---|---|---|
+| **Draft 3 node** | works | node: silent fallback; client: "handshake rejected: possible protocol draft mismatch or wrong server key" |
+| **Draft 4 node** | node: silent fallback; draft 3 client: generic rejection | works |
+
+Keys, tokens, links and replay state stay valid. `singlink version` and the
+FFI `SingLinkVersion` result report the draft. Details:
+[SPEC.md §10](SPEC.md#10-versioning-and-upgrade-compatibility).

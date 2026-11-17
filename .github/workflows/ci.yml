@@ -1,0 +1,91 @@
+# Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
+# SPDX-License-Identifier: Apache-2.0
+#
+# Format, vet, tests (race detector on Linux and macOS, plain on Windows) and
+# a 60 s fuzz smoke per target. Actions are pinned by full commit SHA; the
+# workflow only reads the repository.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, go: "1.24.x", race: true, lint: false }
+          - { os: ubuntu-latest, go: stable, race: true, lint: true }
+          - { os: macos-latest, go: stable, race: true, lint: false }
+          - { os: windows-latest, go: "1.24.x", race: false, lint: false }
+          - { os: windows-latest, go: stable, race: false, lint: false }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: gofmt
+        if: matrix.lint
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go vet (cross-compiled for windows, linux, darwin)
+        if: matrix.lint
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=linux GOARCH=amd64 go vet ./...
+          GOOS=darwin GOARCH=arm64 go vet ./...
+      - name: go test -race
+        if: matrix.race
+        run: go test -race -count=1 ./...
+      - name: go test
+        if: ${{ !matrix.race }}
+        run: go test -count=1 ./...
+
+  fuzz:
+    name: fuzz ${{ matrix.target }} (60 s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [FuzzDecodeAddr, FuzzParseHeader, FuzzParseToken, FuzzParseLink, FuzzParseFirstFlight, FuzzReadFrame]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: stable
+          cache: false
+      - name: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: go test ./singlink -run '^$' -fuzz "^${TARGET}\$" -fuzztime 60s
+      - name: keep a failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-${{ matrix.target }}
+          path: singlink/testdata/fuzz
+          if-no-files-found: ignore
+          retention-days: 14

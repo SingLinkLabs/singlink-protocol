@@ -86,5 +86,16 @@ VPN App（Flutter）放在另一個獨立倉庫。
 服務端要求這份防重放狀態事先明確初始化並持久保存，沒有記憶體回退模式。舊節點設定需新增
 `replay_file`，並在新 key 首次啟動前用 `singlink replay-init` 初始化一次；key 仍被接受時不得清空或還原舊副本。
 不同主機若接受同一把 key，必須共用同一個外部原子 store（或每台主機用自己的 key）。
-同主機共享、跨主機外接 store、Windows 服務端 backend 限制、clock/GC 行為及撤銷列表
+同主機共享、跨主機外接 store、Windows 服務端 backend、clock/GC 行為及撤銷列表
 明確 `empty` 格式，詳見[修復與部署契約](docs/SECURITY-REMEDIATION.md)。
+
+## 規格版本升級
+
+規格第 4 版草案更換了握手識別字串 `IDENT`，所有握手金鑰都和第 3 版不同，但封包格式與版本位元組（`0x01`）沒有改變。協議刻意不做版本協商，也不會退回明文或舊版本，因此節點、App 與原生程式庫必須一起升級：
+
+| 節點 \ 客戶端（或原生程式庫） | 第 3 版客戶端 | 第 4 版客戶端 |
+|---|---|---|
+| **第 3 版節點** | 正常 | 節點：照常轉給偽裝網站；客戶端顯示「handshake rejected: possible protocol draft mismatch or wrong server key」 |
+| **第 4 版節點** | 節點：照常轉給偽裝網站；第 3 版客戶端顯示舊的一般拒絕訊息 | 正常 |
+
+金鑰、權杖、連結與防重放狀態不受影響。`singlink version` 與 FFI `SingLinkVersion` 會回報規格版本。詳見 [SPEC.md §10](SPEC.md#10-versioning-and-upgrade-compatibility)。

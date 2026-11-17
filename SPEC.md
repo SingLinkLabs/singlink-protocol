@@ -1,9 +1,10 @@
 # SingLink Beta Protocol Specification
 
-Status: **Draft 4** (2026-11-16). Draft 4 changes `IDENT` (§4) to
-`SingLink/1 by SingLinkVPN (singlinkvpn.com)`; this changes every derived key,
-so draft 4 peers do not interoperate with draft 3 peers. Draft 3 bound the
-protocol identifier `IDENT` into the handshake. Draft 2 added the fixes from an
+Status: **Draft 4** (2026-11-16; admission order clarified 2026-11-17).
+Draft 4 changes `IDENT` (§2) to `SingLink/1 by SingLinkVPN (singlinkvpn.com)`;
+this changes every derived key, so draft 4 peers do not interoperate with
+draft 3 peers (upgrade matrix: §10). Draft 3 bound the protocol identifier
+`IDENT` into the handshake. Draft 2 added the fixes from an
 internal security review; see [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
 **It has not yet had an independent third-party audit.**
 Wire version byte: `0x01`. Reference implementation: `singlink/` (Go,
@@ -180,8 +181,8 @@ the padding, and through `salt` it is bound to `E`, `CT` and the node. For
 ### 5.2 Node processing
 
 The node MUST perform these checks before sending any byte. Every failure in
-this list is **silent**: the connection is handed to the fallback (§7) with
-all bytes read so far.
+steps 1–7, a replayed flight and unavailable replay state are **silent**: the
+connection is handed to the fallback (§7) with all bytes read so far.
 
 1. The first flight is read as described in §4. The node MUST NOT wait for
    more data because of a length it decrypted.
@@ -196,13 +197,32 @@ all bytes read so far.
 6. `|now − ts| ≤ 120 s`, and `ts` is not earlier than the moment the node
    process started (§5.4, replay).
 7. The token is currently valid and not revoked. Exception: a token that
-   expired less than 24 h ago gets an explicit "expired" answer (step 9),
+   expired less than 24 h ago gets an explicit "expired" answer (step 8),
    so the app can tell the user.
-8. An opaque tag of `E`, keyed with a secret derived from the node key that
-   decrypted the flight, is atomically and durably marked until its complete
-   timestamp acceptance window ends; unavailable state rejects the request.
+8. Refusals that follow from the authenticated request, the token and the
+   node's configuration alone are decided now, before any replay state is
+   touched: token expired (within the 24 h grace), unknown command (8),
+   capability not granted (5), and a TCP destination refused by the
+   configured policy because of its port or an IP literal (4). Such a flight
+   gets only that status: no destination operation, no durable mark, so
+   refused flights cannot consume the replay store. A process MUST NOT
+   answer a replayed copy of a refused flight it has answered: the reference
+   implementation keeps its opaque tag (as in step 9) in a bounded
+   per-process set (with a per-subject share) until the timestamp window
+   ends, and hands copies, and any refused flight it cannot record, to the
+   fallback. A tag in that set is also a replay for step 9.
+9. Every other flight: an opaque tag of `E`, keyed with a secret derived
+   from the node key that decrypted the flight, is atomically and durably
+   marked until its complete timestamp acceptance window ends; unavailable
+   state rejects the request. This happens before any destination operation
+   (DNS lookup, dial, UDP socket).
 
-After step 8 the peer is an authenticated user, and the node answers.
+After step 8 or 9 the peer is an authenticated user, and the node answers.
+Nodes that accept the same keys MUST share the replay store (step 9) and MUST
+use the same destination policy (blocked ports, refused ranges, private
+destinations), so a flight gets the same answer from each of them: a flight
+that one instance refused in step 8 is not marked durably, and an instance
+with a more permissive policy would execute a replayed copy.
 
 ### 5.3 Node reply
 
@@ -237,12 +257,19 @@ Codes 2 (revoked) and 3 (not yet valid) are reserved. Those cases go to the
 fallback silently.
 
 - For TCP, the node resolves and dials the destination before sending
-  `STATUS OK`, then writes the early data to it.
+  `STATUS OK`, then writes the early data to it. Names, and the node's own
+  interface addresses, are checked only then, after the durable mark.
 - The connection is closed when the token's `not after` passes, or when the
   token, its subject or its device is revoked.
 
-A client that reads `HTTP/` instead of `F` has been handed to the fallback.
-It SHOULD tell the user to check the device clock and renew the link.
+A client that reads `HTTP/` instead of `F`, sees the connection close
+before the STATUS frame, or cannot authenticate the STATUS frame, has been
+handed to the fallback (or reached something that is not a node of its draft
+and key). The node deliberately gives no reason. The client SHOULD report a
+clear local diagnostic, for example "handshake rejected: possible protocol
+draft mismatch or wrong server key; check the device clock and renew the
+link", and MUST NOT retry with another draft, a plaintext request or any
+other weaker mode.
 
 ### 5.4 Security properties and their limits (informal)
 
@@ -270,12 +297,20 @@ It SHOULD tell the user to check the device clock and renew the link.
   token copied from one node is useless without the device key. Exception:
   links that embed the device seed (§9) are bearer credentials.
 - **Replay.**
-  - Every accepted first flight is atomically marked in a mandatory durable store
-    before any destination operation. Opaque tags cover the full accepted
-    timestamp window and survive process restarts.
+  - Every first flight that leads to a destination operation is atomically
+    marked in a mandatory durable store before that operation. Opaque tags
+    cover the full accepted timestamp window and survive process restarts.
+  - Refusals decided in §5.2 step 8 perform no destination operation and are
+    not stored durably. Each process answers a given refused flight at most
+    once; another process or host that accepts the same keys may answer a
+    replayed copy once more, with the same status and again without any
+    destination operation. Only a party that can read the inner first
+    flight (no end-to-end TLS) can replay it, and such a party has already
+    seen the original answer.
   - Every instance accepting the same static keys (including old rotation keys)
     must share one atomic/durable store. The reference local-file backend supports
-    same-host Unix processes; independent files across hosts are not shared state.
+    processes on one Unix or Windows host; independent files across hosts are
+    not shared state.
   - Missing, corrupt, full, unavailable or backwards-clock state fails closed.
     Never reset/reinitialize state while its keys remain accepted.
   - Each mark is a one-time handshake marker: a keyed one-way hash derived
@@ -394,11 +429,32 @@ singlink://<token>.<device-seed>@host:port?pk=<node-public-key>&tr=tls&sni=<name
   reference node keys by `server_id` instead.
 - Clients SHOULD warn when `insecure=1` is used without `pin`.
 
-## 10. Versioning
+## 10. Versioning and upgrade compatibility
 
 The header `ver` byte and the token `version` byte allow new versions. A
 node that receives an unknown version treats the connection as
 unauthenticated.
+
+A specification draft that changes `IDENT` changes every derived key
+without changing the wire version byte (`0x01`). There is no in-band draft
+negotiation and no fallback to an older draft or to plaintext: a peer of
+another draft fails exactly like a wrong node key. Upgrade the node, the
+client and any native library (FFI) built from this repository together.
+The reference implementation exposes its draft as `singlink.SpecDraft`, in
+`singlink version` and in the `draft` field of the FFI `SingLinkVersion`
+result.
+
+| Node \ client (or native library) | Draft 3 client | Draft 4 client |
+|---|---|---|
+| **Draft 3 node** | works | node: silent fallback, like any probe; client: "handshake rejected: possible protocol draft mismatch or wrong server key" |
+| **Draft 4 node** | node: silent fallback, like any probe; draft 3 client: its generic rejection ("node rejected the credentials") | works |
+
+Unchanged between drafts 3 and 4: the wire layout of every message, the
+token format, the HKDF/AES-256-GCM/X25519/ML-KEM-768 algorithms and the
+signature inputs other than `IDENT`. Changed: the `IDENT` value and
+therefore every key derived from it. Replay state, node keys, issuer keys,
+tokens and links stay valid across the upgrade; only peers of different
+drafts cannot talk to each other.
 
 ## 11. Open items
 
