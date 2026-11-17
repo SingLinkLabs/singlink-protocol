@@ -389,7 +389,7 @@ func server(args []string) error {
 		return err
 	}
 	cfg.Logger.Info("SingLink node starting", "attribution", singlink.Attribution)
-	cfg.Logger.Info("SingLink node listening", "addr", ln.Addr().String(), "tls", cfg.TLS != nil, "issuers", len(cfg.Issuers), "draft", singlink.SpecDraft)
+	cfg.Logger.Info("SingLink node listening", "addr", ln.Addr().String(), "tls", cfg.TLS != nil, "issuers", len(cfg.Issuers), "draft", singlink.SpecDraft, "policy", srv.PolicyFingerprint())
 	return serve(srv, ln)
 }
 

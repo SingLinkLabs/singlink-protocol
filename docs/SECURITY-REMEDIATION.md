@@ -95,13 +95,15 @@ something the standard library can force or this project has tested. A
 process restart is covered regardless, because flights stamped before a node
 process started are refused.
 
-Run `singlink replay-init` as the account the node service runs as, because
-the directory it creates grants only that account, SYSTEM and Administrators.
-For a service running as LocalSystem, initialize from an elevated context
-running as SYSTEM; for a virtual service account (`NT SERVICE\...`), create
-the directory yourself with an equivalent protected DACL for that account
-(for example with `icacls`), then run `replay-init` for the file path. An
-existing directory is never re-permissioned. Use a local NTFS volume; network
+Run `singlink replay-init` as the same account the node service runs as: the
+directory it creates grants only that account, SYSTEM and Administrators, and
+the store accepts no other grant, so state initialized by one account cannot
+be used by another. For a service running as LocalSystem, initialize from a
+context running as SYSTEM; for a dedicated local user account, use
+`runas /user:<account>`; for a virtual service account (`NT SERVICE\...`),
+run the one-time initialization under that identity as well (for example as a
+one-shot task or service configured with that account). An existing
+directory is never re-permissioned. Use a local NTFS volume; network
 shares and multi-host storage are not supported, as on Unix.
 Multi-host/network-filesystem durability is **not validated or supported by this
 backend**. Deployments sharing accepted keys across hosts must provide an
@@ -164,8 +166,14 @@ Limits of this design, stated plainly:
   destination policy (`allow_private`, `deny_cidrs`, `blocked_ports`,
   `allow_smtp`). Refusals leave no durable mark, so if one instance refuses a
   flight and another would allow it, a replayed copy sent to the permissive
-  instance would be executed once. Roll policy changes out to all instances
-  sharing keys together (or rotate keys with the change).
+  instance would be executed once. Tightening a policy is safe in any order.
+  Loosening is the risky direction: from the first loosened instance until
+  every instance runs the looser policy (plus the 121-second tag window), a
+  flight refused by a stricter instance could be executed by a looser one.
+  Loosen together with a key rotation, or keep that window short. Each node logs a
+  short fingerprint of its destination policy at start-up (`policy=` in the
+  "SingLink node listening" line) so that drift between instances is
+  visible.
 
 Still decided after the durable mark, because they depend on host or
 per-subject state: name resolution (status 7), the node's own interface
@@ -325,7 +333,7 @@ field of the FFI `SingLinkVersion` result. Regression tests:
 | Item | Change | Tests |
 |---|---|---|
 | P-R01 draft 4 wording | Scoped the "unchanged" statements; upgrade matrix here, in SPEC §10 and the README; client mismatch diagnostic; node behaviour unchanged | `TestDraft*`, `TestClientReportsDraftOrKeyMismatch` |
-| Authenticated refusals and replay capacity (section 6) | Stateless refusals decided before `CheckAndMark`; per-process status-only replay set with a per-subject share | `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`, `TestRefusedFlightReplaysGoToFallback`, `TestRefusedReplayAcrossProcessesNeverExecutes`, `TestRefusalFloodDoesNotSilenceOtherSubjects`, `TestStatusOnlyMarkBlocksLaterAdmission`, `TestNoDestinationOperationBeforeReplayCheck`, `TestPreAdmissionIsConfigOnly`, `TestStatusMarksBoundedAndExpiring` |
+| Authenticated refusals and replay capacity (section 6) | Stateless refusals decided before `CheckAndMark`; per-process status-only replay set with a per-subject share | `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`, `TestRefusedFlightReplaysGoToFallback`, `TestRefusedReplayAcrossProcessesNeverExecutes`, `TestRefusalFloodDoesNotSilenceOtherSubjects`, `TestPolicyFingerprint`, `TestStatusOnlyMarkBlocksLaterAdmission`, `TestNoDestinationOperationBeforeReplayCheck`, `TestPreAdmissionIsConfigOnly`, `TestStatusMarksBoundedAndExpiring` |
 | Windows (section 8, 29 pass / 43 fail baseline) | Windows `FileReplayStore` backend (LockFileEx, DACL checks, write-through replace); CI runs the full suite on Windows | `TestReplayStore*` on every OS, `TestPrivateACLPolicy` |
 | Coverage | CLI made testable. Visible changes: range checks on `-rate`, `-max-conns`, `-plan` (values that used to wrap silently, for example a rate of 2^32 becoming "unlimited") and `-days`; exit status 2 for unexpected arguments; a `help` command; one extra `version` line naming the spec draft; `tls_key` without `tls_cert` is now an error instead of being ignored. Engine tests | `cmd/singlink`, `engine` |
 | CI | GitHub Actions: gofmt, vet (also cross-compiled), `go test -race` on Linux and macOS, `go test` on Windows, 60 s fuzz smoke per target; actions pinned by SHA, read-only token | `.github/workflows/ci.yml` |

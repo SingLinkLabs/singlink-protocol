@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -487,5 +488,37 @@ func TestRefusedReplayAcrossProcessesNeverExecutes(t *testing.T) {
 	}
 	if st, ok := exchange(t, other, flight, hs); ok {
 		t.Fatalf("permitted flight replayed on the sibling process: %v", st)
+	}
+}
+
+func TestPolicyFingerprint(t *testing.T) {
+	key, _ := GenerateServerKey()
+	issuer, _ := GenerateEd25519()
+	mk := func(c ServerConfig) string {
+		t.Helper()
+		c.Key, c.Issuers, c.ReplayStore = key, NewIssuers(issuer.Public().(ed25519.PublicKey)), &capacityStore{limit: 1}
+		s, err := NewServer(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.PolicyFingerprint()
+	}
+	p1, p2 := netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/32")
+	base := mk(ServerConfig{DenyCIDRs: []netip.Prefix{p1, p2}, BlockedPorts: []uint16{22, 23}})
+	if base != mk(ServerConfig{DenyCIDRs: []netip.Prefix{p2, p1, p1}, BlockedPorts: []uint16{23, 22, 22}}) {
+		t.Fatal("fingerprint depends on order or duplicates")
+	}
+	for name, c := range map[string]ServerConfig{
+		"private": {DenyCIDRs: []netip.Prefix{p1, p2}, BlockedPorts: []uint16{22, 23}, AllowPrivate: true},
+		"smtp":    {DenyCIDRs: []netip.Prefix{p1, p2}, BlockedPorts: []uint16{22, 23}, AllowSMTP: true},
+		"ports":   {DenyCIDRs: []netip.Prefix{p1, p2}, BlockedPorts: []uint16{22}},
+		"ranges":  {DenyCIDRs: []netip.Prefix{p1}, BlockedPorts: []uint16{22, 23}},
+	} {
+		if mk(c) == base {
+			t.Fatalf("%s change not reflected", name)
+		}
+	}
+	if len(base) != 12 {
+		t.Fatal("unexpected fingerprint length")
 	}
 }

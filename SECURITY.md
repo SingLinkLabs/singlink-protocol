@@ -33,7 +33,9 @@ remediation of the 2026-11-13 source audit,
   Refusals decided from that policy, the token's capabilities or an unknown
   command do not use the replay store (so they cannot fill it); each process
   keeps them replay-protected in memory. With differing policies, a flight
-  refused by one instance could be executed when replayed to another.
+  refused by one instance could be executed when replayed to another. Each
+  node logs a fingerprint of its policy at start-up (`policy=`) to make
+  drift visible.
 - What the state holds: to prevent replay attacks, a node briefly keeps a
   cryptographically processed one-time handshake marker, deleted automatically
   after about 4 minutes. It contains no IP address, destination, account or any

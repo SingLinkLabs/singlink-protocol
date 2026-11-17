@@ -5,12 +5,18 @@ package singlink
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -444,6 +450,33 @@ func (s *Server) handle(raw net.Conn) {
 		return
 	}
 	s.serveTCP(ctx, conn, hs.req, lim, reject)
+}
+
+// PolicyFingerprint returns a short, order-independent hash of the node's
+// configured destination policy (private destinations, refused ranges and
+// blocked ports). Every instance that accepts the same keys must have the same
+// policy (SPEC §5.2); logging this value at start-up makes drift visible. It
+// reveals nothing beyond the configuration it summarizes.
+func (s *Server) PolicyFingerprint() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "private=%t\n", s.res.allowPrivate)
+	ports := make([]int, 0, len(s.res.blockedPorts))
+	for p, blocked := range s.res.blockedPorts {
+		if blocked {
+			ports = append(ports, int(p))
+		}
+	}
+	sort.Ints(ports)
+	fmt.Fprintf(&b, "ports=%v\n", ports)
+	deny := make([]string, 0, len(s.res.deny))
+	for _, p := range s.res.deny {
+		deny = append(deny, p.Masked().String())
+	}
+	sort.Strings(deny)
+	deny = slices.Compact(deny)
+	fmt.Fprintf(&b, "deny=%s\n", strings.Join(deny, ","))
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:6])
 }
 
 // preAdmission returns the refusal status for an authenticated request, or
