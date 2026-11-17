@@ -49,6 +49,14 @@ const (
 	// draft 4 peers derive different keys and do not interoperate.
 	Identifier = "SingLink/1 by SingLinkVPN (singlinkvpn.com)"
 
+	// SpecDraft is the protocol specification draft this implementation
+	// speaks (SPEC.md). Drafts that change Identifier derive different keys
+	// and do not interoperate, although the wire version byte stays 1: there
+	// is deliberately no in-band version negotiation or plaintext fallback.
+	// Clients, nodes and native libraries must be upgraded together (see the
+	// compatibility matrix in SPEC.md §10).
+	SpecDraft = 4
+
 	wireVersion = 1
 	label       = "SingLink/1"
 )
@@ -152,9 +160,18 @@ var (
 	errBadFrame = errors.New("singlink: malformed frame")
 	errProbe    = errors.New("singlink: unauthenticated connection")
 
-	// ErrRejected means the node did not accept the credentials and treated
-	// the connection like any other visitor. Typical causes: the device
-	// clock is more than 2 minutes off, the token expired more than a day
-	// ago or was revoked, or the link belongs to another node.
-	ErrRejected = errors.New("singlink: node rejected the credentials (check the device clock, then renew the link)")
+	// ErrRejected means the node did not complete the handshake and treated
+	// the connection like any other visitor (it answered as its fallback
+	// website, closed the connection, or sent a reply that is not keyed to
+	// this handshake). The node gives no reason, by design: the same answer
+	// keeps it indistinguishable from a website for probes. Typical causes: a
+	// protocol draft mismatch (client, node and native library must all speak
+	// the same draft, see SpecDraft), a wrong node public key in the link, a
+	// device clock more than 2 minutes off, or a token that expired more than
+	// a day ago or was revoked.
+	//
+	// The text keeps the historical prefix "node rejected the credentials",
+	// which apps match on.
+	ErrRejected = fmt.Errorf("singlink: node rejected the credentials: handshake rejected, possible protocol draft mismatch "+
+		"(this client speaks SingLink Beta draft %d) or wrong server key; also check the device clock, then renew the link", SpecDraft)
 )

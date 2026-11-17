@@ -93,10 +93,12 @@ func (c *Conn) sendRequest(p []byte) (int, error) {
 func (c *Conn) fail(err error) {
 	c.closeOnce.Do(func() {
 		c.hsErr = err
-		close(c.hsDone)
+		// Publish the diagnostic before waking waiters, so a caller that
+		// sees the handshake fail also sees it in LastError.
 		if err != nil && err != net.ErrClosed && c.client != nil {
 			c.client.lastErr.Store(err.Error())
 		}
+		close(c.hsDone)
 	})
 }
 
@@ -114,13 +116,24 @@ func (c *Conn) finishHandshake(hs *clientHandshake) {
 	}
 	c2s, s2c, err := hs.finish(F)
 	if err != nil {
-		c.fail(err)
+		// Not an X25519 point a node would send: not a node of this draft.
+		c.fail(ErrRejected)
 		return
 	}
 	c.fw = &frameWriter{w: c.raw, cs: c2s, padFrames: c.client.PadFrames, padMax: c.client.PadMax}
 	c.fr = &frameReader{r: c.raw, cs: s2c}
 	t, data, err := c.fr.readFrame()
 	if err != nil {
+		// A node writes F and the sealed STATUS frame together (SPEC §5.3).
+		// A reply that does not authenticate under this handshake's keys, or
+		// that ends right after 32 bytes, came from something that could not
+		// derive them: a fallback website, or a node with a different draft
+		// (Identifier) or key. Other errors on this read (timeouts, resets)
+		// stay as they are. (Any failure to read F at all is reported as
+		// ErrRejected, as before.)
+		if errors.Is(err, errBadFrame) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			err = ErrRejected
+		}
 		c.fail(err)
 		return
 	}
