@@ -15,6 +15,22 @@ func policyAddresses(ip netip.Addr) []netip.Addr {
 }
 
 func (rs *resolver) allowedAddress(ip netip.Addr) bool {
+	if !rs.configAllowed(ip) {
+		return false
+	}
+	if !rs.allowPrivate {
+		for _, equivalent := range policyAddresses(ip) {
+			if rs.local.has(equivalent) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// configAllowed applies only the node's configured, host-independent address
+// policy (deny_cidrs and the special-purpose ranges). It performs no I/O.
+func (rs *resolver) configAllowed(ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return false
 	}
@@ -24,9 +40,25 @@ func (rs *resolver) allowedAddress(ip netip.Addr) bool {
 				return false
 			}
 		}
-		if !rs.allowPrivate && (!publicIP(equivalent) || rs.local.has(equivalent)) {
+		if !rs.allowPrivate && !publicIP(equivalent) {
 			return false
 		}
 	}
 	return true
+}
+
+// configStatus is the part of the destination policy that depends only on
+// the request and the node's configuration: blocked ports and IP literals in
+// configured or special-purpose ranges. It performs no DNS lookup, no dial
+// and no other destination operation, so a node may decide it before the
+// durable replay check. Host-dependent checks (the node's own interface
+// addresses) and name resolution stay after admission, in resolve.
+func (rs *resolver) configStatus(a Addr) Status {
+	if rs.blockedPorts[a.Port] || a.Port == 0 {
+		return StatusForbiddenDest
+	}
+	if a.IP.IsValid() && !rs.configAllowed(a.IP) {
+		return StatusForbiddenDest
+	}
+	return StatusOK
 }

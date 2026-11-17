@@ -86,12 +86,14 @@ type ServerConfig struct {
 
 // Server is an SingLink node.
 type Server struct {
-	cfg      ServerConfig
-	replay   ReplayStore
-	subjects subjects
-	res      *resolver
-	log      *slog.Logger
-	Stats    Stats
+	cfg    ServerConfig
+	replay ReplayStore
+	// statusMarks replay-protects status-only answers in this process.
+	statusMarks statusMarks
+	subjects    subjects
+	res         *resolver
+	log         *slog.Logger
+	Stats       Stats
 
 	keys    []*ServerPrivateKey
 	started time.Time
@@ -340,12 +342,40 @@ func (s *Server) handle(raw net.Conn) {
 		fail(errProbe)
 		return
 	}
-	// Mark before any destination operation. Store acknowledgement is durable.
-	// A recently expired token only ever gets the "expired" status (no
-	// destination operation), so it does not consume replay state.
-	if !expired {
+	// Decide every refusal that depends only on the authenticated request,
+	// the token and the node configuration before touching the durable
+	// replay store, so refused flights cannot consume its capacity or I/O
+	// budget (and so cannot block other subjects). None of these checks
+	// performs a destination operation.
+	tagExpiry := hs.req.ts.Add(maxSupportedTimeSkew + time.Second)
+	refusal, refusalMsg := s.preAdmission(hs.req, tok, expired)
+	if refusal != StatusOK {
+		// A status-only answer: replay-protected inside this process, never
+		// stored durably. A replayed copy goes to the fallback like any other
+		// replay. Without room in the set (or in this subject's share) the
+		// flight gets no answer either; that is not counted against the
+		// client address, because the flight did authenticate.
+		marked, replay := s.statusMarks.mark(hs.replayTag, tok.Subject, tagExpiry, now)
+		if replay {
+			fail(errProbe)
+			return
+		}
+		if !marked {
+			s.guard.end(ip)
+			pending = false
+			s.fallback(raw, flight, errProbe)
+			return
+		}
+	} else {
+		// Mark before any destination operation. Store acknowledgement is
+		// durable. A tag that already received a status-only answer here is
+		// a replay as well.
+		if s.statusMarks.seen(hs.replayTag, now) {
+			fail(errProbe)
+			return
+		}
 		markCtx, markCancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
-		fresh, storeErr := s.replay.CheckAndMark(markCtx, hs.replayTag, hs.req.ts.Add(maxSupportedTimeSkew+time.Second))
+		fresh, storeErr := s.replay.CheckAndMark(markCtx, hs.replayTag, tagExpiry)
 		markTimedOut := markCtx.Err() != nil
 		markCancel()
 		if storeErr != nil || !fresh || markTimedOut {
@@ -374,19 +404,8 @@ func (s *Server) handle(raw net.Conn) {
 		raw.SetReadDeadline(time.Now().Add(time.Second))
 		io.Copy(io.Discard, io.LimitReader(raw, 1<<20))
 	}
-	if expired {
-		reject(StatusTokenExpired, "")
-		return
-	}
-	need := CapTCP
-	if hs.req.cmd == CmdUDP {
-		need = CapUDP
-	} else if hs.req.cmd != CmdTCP {
-		reject(StatusBadRequest, "unknown command")
-		return
-	}
-	if !tok.Has(need) {
-		reject(StatusCapDenied, "")
+	if refusal != StatusOK {
+		reject(refusal, refusalMsg)
 		return
 	}
 	lim, ok := s.subjects.acquire(tok)
@@ -425,6 +444,35 @@ func (s *Server) handle(raw net.Conn) {
 		return
 	}
 	s.serveTCP(ctx, conn, hs.req, lim, reject)
+}
+
+// preAdmission returns the refusal status for an authenticated request, or
+// StatusOK when the request needs the durable replay mark and a destination
+// operation. It is stateless: it reads only the request, the token and the
+// node configuration (no store, no DNS, no dial, no subject counters), so a
+// flight gets the same answer from every instance with the same
+// configuration.
+func (s *Server) preAdmission(req request, tok *Token, expired bool) (Status, string) {
+	if expired {
+		return StatusTokenExpired, ""
+	}
+	need := CapTCP
+	switch req.cmd {
+	case CmdTCP:
+	case CmdUDP:
+		need = CapUDP
+	default:
+		return StatusBadRequest, "unknown command"
+	}
+	if !tok.Has(need) {
+		return StatusCapDenied, ""
+	}
+	if req.cmd == CmdTCP {
+		if st := s.res.configStatus(req.dst); st != StatusOK {
+			return st, ""
+		}
+	}
+	return StatusOK, ""
 }
 
 func (s *Server) serveTCP(ctx context.Context, conn *Conn, req request, lim *limiter, reject func(Status, string)) {
