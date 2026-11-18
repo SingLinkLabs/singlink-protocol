@@ -81,6 +81,10 @@ func (b *blockingReplayStore) CheckAndMark(ctx context.Context, tag [32]byte, ex
 	return b.inner.CheckAndMark(ctx, tag, exp)
 }
 
+func (b *blockingReplayStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	return b.inner.Has(ctx, tag)
+}
+
 // A revocation published while a handshake is between its revocation check
 // and session registration must still end that session.
 func TestRevocationDuringAdmissionClosesSession(t *testing.T) {

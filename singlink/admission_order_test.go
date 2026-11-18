@@ -28,11 +28,27 @@ import (
 // capacityStore is a test-only atomic in-memory ReplayStore with a fixed
 // capacity, like the reviewer's 3-slot control.
 type capacityStore struct {
-	mu    sync.Mutex
-	limit int
-	marks map[[32]byte]time.Time
-	calls atomic.Int32
-	fail  error
+	mu       sync.Mutex
+	limit    int
+	marks    map[[32]byte]time.Time
+	calls    atomic.Int32 // CheckAndMark calls (durable writes)
+	hasCalls atomic.Int32 // read-only lookups
+	fail     error
+	hasFail  error
+}
+
+func (s *capacityStore) Has(_ context.Context, tag [32]byte) (bool, error) {
+	s.hasCalls.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return false, s.fail
+	}
+	if s.hasFail != nil {
+		return false, s.hasFail
+	}
+	exp, ok := s.marks[tag]
+	return ok && exp.After(time.Now()), nil
 }
 
 func (s *capacityStore) CheckAndMark(_ context.Context, tag [32]byte, expiry time.Time) (bool, error) {
@@ -252,7 +268,8 @@ func TestStatusOnlyMarkBlocksLaterAdmission(t *testing.T) {
 }
 
 // Ordering: with an unavailable store a permitted flight never reaches its
-// destination, while a refusal (no destination operation) is still answered.
+// destination, and a refusal is not answered either: its read-only replay
+// lookup fails closed (F-01), and it never writes to the store.
 func TestNoDestinationOperationBeforeReplayCheck(t *testing.T) {
 	store := &capacityStore{limit: 10, fail: errors.New("synthetic store outage")}
 	e := newEnv(t, envOpt{tok: &Token{Caps: CapTCP, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)},
@@ -286,11 +303,14 @@ func TestNoDestinationOperationBeforeReplayCheck(t *testing.T) {
 		t.Fatalf("destination contacted before replay check (dials %d, store calls %d)", dialed.Load(), store.calls.Load())
 	}
 	flight, hs = flightFor(t, e, CmdUDP, "udp:0", nil)
-	if st, ok := exchange(t, e.addr, flight, hs); !ok || st != StatusCapDenied {
-		t.Fatalf("refusal not answered: %v %v", st, ok)
+	if st, ok := exchange(t, e.addr, flight, hs); ok {
+		t.Fatalf("refusal answered although the replay lookup failed: %v", st)
 	}
-	if store.calls.Load() != 1 {
-		t.Fatal("refusal used the durable store")
+	if store.calls.Load() != 1 || store.hasCalls.Load() != 1 {
+		t.Fatalf("refusal wrote to the durable store or skipped the lookup (writes %d, lookups %d)", store.calls.Load(), store.hasCalls.Load())
+	}
+	if e.srv.statusMarks.seen(replayTagFor(e.key, flight[:x25519Len]), time.Now()) {
+		t.Fatal("refusal took a status-only mark although it was not answered")
 	}
 }
 

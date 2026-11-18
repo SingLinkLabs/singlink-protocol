@@ -201,16 +201,26 @@ connection is handed to the fallback (§7) with all bytes read so far.
    so the app can tell the user.
 8. Refusals that follow from the authenticated request, the token and the
    node's configuration alone are decided now, before any replay state is
-   touched: token expired (within the 24 h grace), unknown command (8),
+   written: token expired (within the 24 h grace), unknown command (8),
    capability not granted (5), and a TCP destination refused by the
    configured policy because of its port or an IP literal (4). Such a flight
-   gets only that status: no destination operation, no durable mark, so
-   refused flights cannot consume the replay store. A process MUST NOT
-   answer a replayed copy of a refused flight it has answered: the reference
-   implementation keeps its opaque tag (as in step 9) in a bounded
+   gets only that status and never a destination operation. Exception: an
+   expired-token flight whose `ts` is earlier than `not after` + 121 s could
+   have been admitted by some node while the token was still valid; it is
+   handled as in step 9 (durable mark, a copy is a replay) and then gets
+   only status 1. Every other refusal leaves no durable mark, so refused
+   flights cannot consume the replay store. A copy of a flight that any node
+   sharing the replay store has admitted MUST NOT get a status-only answer:
+   before answering, the node looks the tag up (read-only) in the replay
+   store, and a held tag, or a failed lookup, is handled silently. A process
+   MUST NOT answer a replayed copy of a refused flight it has answered: the
+   reference implementation keeps its opaque tag (as in step 9) in a bounded
    per-process set (with a per-subject share) until the timestamp window
    ends, and hands copies, and any refused flight it cannot record, to the
-   fallback. A tag in that set is also a replay for step 9.
+   fallback. A tag in that set is also a replay for step 9. (The lookup is
+   skipped for an expired-token flight stamped too late to have been
+   admitted, and for a flight the set has no room for, because neither can
+   be answered differently.)
 9. Every other flight: an opaque tag of `E`, keyed with a secret derived
    from the node key that decrypted the flight, is atomically and durably
    marked until its complete timestamp acceptance window ends; unavailable
@@ -221,8 +231,8 @@ After step 8 or 9 the peer is an authenticated user, and the node answers.
 Nodes that accept the same keys MUST share the replay store (step 9) and MUST
 use the same destination policy (blocked ports, refused ranges, private
 destinations), so a flight gets the same answer from each of them: a flight
-that one instance refused in step 8 is not marked durably, and an instance
-with a more permissive policy would execute a replayed copy.
+that one instance refused by policy in step 8 is not marked durably, and an
+instance with a more permissive policy would execute a replayed copy.
 
 ### 5.3 Node reply
 
@@ -300,13 +310,16 @@ other weaker mode.
   - Every first flight that leads to a destination operation is atomically
     marked in a mandatory durable store before that operation. Opaque tags
     cover the full accepted timestamp window and survive process restarts.
-  - Refusals decided in §5.2 step 8 perform no destination operation and are
-    not stored durably. Each process answers a given refused flight at most
-    once; another process or host that accepts the same keys may answer a
-    replayed copy once more, with the same status and again without any
-    destination operation. Only a party that can read the inner first
-    flight (no end-to-end TLS) can replay it, and such a party has already
-    seen the original answer.
+  - Refusals decided in §5.2 step 8 perform no destination operation and,
+    except for expired-token flights that could have been admitted before
+    expiry, are not stored durably. A copy of a flight that any instance
+    sharing the store admitted never gets a status-only answer (it is
+    looked up read-only first). Each process answers a given refused flight
+    at most once; another process or host that accepts the same keys may
+    answer a replayed copy of a refused (never admitted) flight once more,
+    with the same status and again without any destination operation. Only
+    a party that can read the inner first flight (no end-to-end TLS) can
+    replay it, and such a party has already seen the original answer.
   - Every instance accepting the same static keys (including old rotation keys)
     must share one atomic/durable store. The reference local-file backend supports
     processes on one Unix or Windows host; independent files across hosts are

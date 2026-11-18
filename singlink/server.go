@@ -349,27 +349,60 @@ func (s *Server) handle(raw net.Conn) {
 		return
 	}
 	// Decide every refusal that depends only on the authenticated request,
-	// the token and the node configuration before touching the durable
-	// replay store, so refused flights cannot consume its capacity or I/O
-	// budget (and so cannot block other subjects). None of these checks
-	// performs a destination operation.
+	// the token and the node configuration before writing to the durable
+	// replay store, so refused flights cannot consume its capacity. None of
+	// these checks performs a destination operation.
 	tagExpiry := hs.req.ts.Add(maxSupportedTimeSkew + time.Second)
 	refusal, refusalMsg := s.preAdmission(hs.req, tok, expired)
-	if refusal != StatusOK {
-		// A status-only answer: replay-protected inside this process, never
-		// stored durably. A replayed copy goes to the fallback like any other
-		// replay. Without room in the set (or in this subject's share) the
-		// flight gets no answer either; that is not counted against the
+	// An expired-token flight whose timestamp is close enough to NotAfter
+	// that some instance could have admitted it while the token was still
+	// valid takes the durable path: the atomic mark decides between the
+	// original and its copies, so a copy of an admitted flight is a replay
+	// and never gets STATUS 1 (F-01). It is still answered with the refusal
+	// only, without any destination operation.
+	durable := refusal == StatusOK || (refusal == StatusTokenExpired && mayHaveBeenAdmitted(hs.req.ts, tok))
+	if !durable {
+		// A status-only answer: replay-protected inside this process. A copy
+		// already answered here, or one whose tag is durably held because an
+		// instance sharing the store admitted it, goes to the fallback like
+		// any other replay. Without room in the set (or in this subject's
+		// share), or when the read-only durable lookup fails, the flight gets
+		// no answer either (fail closed); that is not counted against the
 		// client address, because the flight did authenticate.
-		marked, replay := s.statusMarks.mark(hs.replayTag, tok.Subject, tagExpiry, now)
+		silent := func() {
+			s.guard.end(ip)
+			pending = false
+			s.fallback(raw, flight, errProbe)
+		}
+		if s.statusMarks.seen(hs.replayTag, now) {
+			fail(errProbe)
+			return
+		}
+		if !s.statusMarks.room(tok.Subject, now) {
+			silent()
+			return
+		}
+		// An expired-token flight on this branch is stamped too late for
+		// any instance to have admitted it (mayHaveBeenAdmitted), so it
+		// cannot be durably held and needs no lookup.
+		if refusal != StatusTokenExpired {
+			held, err := s.durablyHeld(hs.replayTag)
+			if err != nil {
+				silent()
+				return
+			}
+			if held {
+				fail(errProbe)
+				return
+			}
+		}
+		marked, replay := s.statusMarks.mark(hs.replayTag, tok.Subject, tagExpiry, time.Now())
 		if replay {
 			fail(errProbe)
 			return
 		}
 		if !marked {
-			s.guard.end(ip)
-			pending = false
-			s.fallback(raw, flight, errProbe)
+			silent()
 			return
 		}
 	} else {
@@ -477,6 +510,27 @@ func (s *Server) PolicyFingerprint() string {
 	fmt.Fprintf(&b, "deny=%s\n", strings.Join(deny, ","))
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:6])
+}
+
+// mayHaveBeenAdmitted reports whether a flight stamped ts could have been
+// admitted, by any supported instance, while tok was still valid: admission
+// needs now < NotAfter and ts <= now + 120 s. The extra second covers the
+// whole-second encoding of ts and NotAfter, as for the tag expiry.
+func mayHaveBeenAdmitted(ts time.Time, tok *Token) bool {
+	return ts.Before(tok.NotAfter.Add(maxSupportedTimeSkew + time.Second))
+}
+
+// durablyHeld reports whether tag holds a durable mark. It never writes, and
+// an unavailable store, a store error or a timeout is reported as an error so
+// the caller fails closed.
+func (s *Server) durablyHeld(tag [32]byte) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HandshakeTimeout)
+	defer cancel()
+	held, err := s.replay.Has(ctx, tag)
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return held, err
 }
 
 // preAdmission returns the refusal status for an authenticated request, or

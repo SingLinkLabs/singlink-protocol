@@ -21,10 +21,12 @@ const (
 // authenticated flights that were answered with a refusal status only (token
 // expired, capability not granted, unknown command, destination refused by the
 // node's configured policy). Those answers never perform a destination
-// operation, so they are decided before the durable ReplayStore and never
-// consume its capacity. This bounded in-memory set keeps a replayed copy of
-// such a flight from getting a node answer a second time from this process:
-// the copy goes to the fallback exactly like any other replay. When the set,
+// operation and never write to the durable ReplayStore, so they do not
+// consume its capacity (the store is only read, to recognise copies of
+// flights that some instance admitted). This bounded in-memory set keeps a
+// replayed copy of such a flight from getting a node answer a second time
+// from this process: the copy goes to the fallback exactly like any other
+// replay. When the set,
 // or the subject's share of it, is full a further status-only answer is not
 // given at all (the flight goes to the fallback); admission of permitted
 // flights never depends on this set.
@@ -95,14 +97,7 @@ func (s *statusMarks) mark(tag [32]byte, subject [16]byte, expiry, now time.Time
 	if exp, ok := s.m[tag]; ok && exp > n {
 		return false, true
 	}
-	limit, perSubject := s.limit, s.perSubject
-	if limit <= 0 {
-		limit = defaultStatusMarks
-	}
-	if perSubject <= 0 {
-		perSubject = statusMarksPerSubject
-	}
-	if len(s.m) >= limit || s.subjects[subject] >= perSubject || !expiry.After(now) {
+	if !s.roomLocked(subject) || !expiry.After(now) {
 		return false, false
 	}
 	if s.m == nil {
@@ -113,4 +108,25 @@ func (s *statusMarks) mark(tag [32]byte, subject [16]byte, expiry, now time.Time
 	s.subjects[subject]++
 	heap.Push(&s.h, expiryEntry{exp: expiry.UnixNano(), tag: tag, subject: subject})
 	return true, false
+}
+
+// room reports whether subject could take one more mark now. The node asks
+// before its durable replay lookup, so a subject over its share (whose
+// refusals get no answer anyway) cannot make the node read the store.
+func (s *statusMarks) room(subject [16]byte, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now.UnixNano())
+	return s.roomLocked(subject)
+}
+
+func (s *statusMarks) roomLocked(subject [16]byte) bool {
+	limit, perSubject := s.limit, s.perSubject
+	if limit <= 0 {
+		limit = defaultStatusMarks
+	}
+	if perSubject <= 0 {
+		perSubject = statusMarksPerSubject
+	}
+	return len(s.m) < limit && s.subjects[subject] < perSubject
 }

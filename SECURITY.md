@@ -31,8 +31,9 @@ remediation of the 2026-11-13 source audit,
 - Nodes and processes that accept the same key must use the same destination
   policy (`allow_private`, `deny_cidrs`, `blocked_ports`, `allow_smtp`).
   Refusals decided from that policy, the token's capabilities or an unknown
-  command do not use the replay store (so they cannot fill it); each process
-  keeps them replay-protected in memory. With differing policies, a flight
+  command never write to the replay store (so they cannot fill it); they only
+  look their tag up, so a copy of an admitted flight is handled as a replay,
+  and each process keeps them replay-protected in memory. With differing policies, a flight
   refused by one instance could be executed when replayed to another. Each
   node logs a fingerprint of its policy at start-up (`policy=`) to make
   drift visible.

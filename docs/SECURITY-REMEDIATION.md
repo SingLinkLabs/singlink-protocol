@@ -126,25 +126,31 @@ empty store, about 12 ms with 10,000 live marks and about 70 ms with 60,000 on
 macOS/APFS, i.e. roughly 14 to 100 handshakes per second for the whole node.
 Holders of a valid token can use up that budget or the capacity (65,536 marks
 by default, about 4 minutes of admissions), after which admissions fail closed.
+Since F-01, status-only refusals that can still be answered also take the
+store lock once for a read-only lookup (no write), bounded per subject by the
+status-only share described below.
 Benchmark storage latency/capacity for a deployment before choosing it at scale,
 and provide a faster external `ReplayStore` for busy nodes.
 
-### Admission order: refusals never use the store
+### Admission order: refusals never write to the store
 
 Since the 2026-11-17 re-audit follow-up, every refusal that follows from the
 authenticated request, the token and the node configuration alone is decided
-**before** the durable store: recently expired token, unknown command,
+**before** anything is written to the durable store: recently expired token, unknown command,
 capability not granted (for example UDP on a TCP-only token) and a TCP
 destination refused by the configured policy because of its port or an IP
 literal (`deny_cidrs`, special-purpose ranges unless `allow_private`). These
 flights receive only their status, perform no destination operation and never
 call `CheckAndMark`, so a valid-token holder cannot fill the store's capacity
-or spend its I/O budget with refused requests, and cannot block other
-subjects that way. The re-audit's control (one permitted and two
+with refused requests. Since the F-01 fix (below) two qualifications apply:
+an expired-token flight stamped early enough that it could have been
+admitted before expiry is marked durably like a permitted flight (one mark,
+then status 1 only), and the other refusals perform one read-only lookup
+(`ReplayStore.Has`) before they are answered. The re-audit's control (one permitted and two
 capability-denied flights against a 3-slot store, then another subject) is
 the regression test `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`.
 
-Replay resistance of these answers is kept without the durable store: each
+Replay resistance of these answers is kept without writing to the durable store: each
 process keeps the same opaque tag for each status-only answer in a bounded
 in-memory set (32,768 tags per process, at most 256 per subject so one account
 cannot crowd out the others) until its timestamp window ends. A replayed copy
@@ -157,16 +163,19 @@ process started are already refused, so a restart does not reopen that window.
 Limits of this design, stated plainly:
 
 - The set is per process. Another process or host that accepts the same keys
-  can answer a replayed copy of a refused flight once more, with the same
-  status and without any destination operation. Replaying an inner first
+  can answer a replayed copy of a refused (never admitted) flight once more,
+  with the same status and without any destination operation. A copy of an
+  admitted flight is never answered that way (F-01). Replaying an inner first
   flight requires seeing it (raw `tcp` transport, a TLS-terminating proxy or
   CDN, or an accepted interception), and such an observer has already seen the
   original answer.
 - All processes and hosts that accept the same keys **must** use the same
   destination policy (`allow_private`, `deny_cidrs`, `blocked_ports`,
-  `allow_smtp`). Refusals leave no durable mark, so if one instance refuses a
+  `allow_smtp`). Policy refusals leave no durable mark, so if one instance refuses a
   flight and another would allow it, a replayed copy sent to the permissive
-  instance would be executed once. Tightening a policy is safe in any order.
+  instance would be executed once. Tightening a policy is safe in any order
+  as far as execution goes (a held-back original could still be answered once
+  by a stricter instance and admitted by a looser one).
   Loosening is the risky direction: from the first loosened instance until
   every instance runs the looser policy (plus the 121-second tag window), a
   flight refused by a stricter instance could be executed by a looser one.
@@ -333,7 +342,7 @@ field of the FFI `SingLinkVersion` result. Regression tests:
 | Item | Change | Tests |
 |---|---|---|
 | P-R01 draft 4 wording | Scoped the "unchanged" statements; upgrade matrix here, in SPEC §10 and the README; client mismatch diagnostic; node behaviour unchanged | `TestDraft*`, `TestClientReportsDraftOrKeyMismatch` |
-| Authenticated refusals and replay capacity (section 6) | Stateless refusals decided before `CheckAndMark`; per-process status-only replay set with a per-subject share | `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`, `TestRefusedFlightReplaysGoToFallback`, `TestRefusedReplayAcrossProcessesNeverExecutes`, `TestRefusalFloodDoesNotSilenceOtherSubjects`, `TestPolicyFingerprint`, `TestStatusOnlyMarkBlocksLaterAdmission`, `TestNoDestinationOperationBeforeReplayCheck`, `TestPreAdmissionIsConfigOnly`, `TestStatusMarksBoundedAndExpiring` |
+| Authenticated refusals and replay capacity (section 6) | Stateless refusals decided before `CheckAndMark` (read-only lookup and in-window expiry since F-01, below); per-process status-only replay set with a per-subject share | `TestCapabilityDeniedFlightsDoNotConsumeReplayCapacity`, `TestRefusedFlightReplaysGoToFallback`, `TestRefusedReplayAcrossProcessesNeverExecutes`, `TestRefusalFloodDoesNotSilenceOtherSubjects`, `TestPolicyFingerprint`, `TestStatusOnlyMarkBlocksLaterAdmission`, `TestNoDestinationOperationBeforeReplayCheck`, `TestPreAdmissionIsConfigOnly`, `TestStatusMarksBoundedAndExpiring` |
 | Windows (section 8, 29 pass / 43 fail baseline) | Windows `FileReplayStore` backend (LockFileEx, DACL checks, write-through replace); CI runs the full suite on Windows | `TestReplayStore*` on every OS, `TestPrivateACLPolicy` |
 | Coverage | CLI made testable. Visible changes: range checks on `-rate`, `-max-conns`, `-plan` (values that used to wrap silently, for example a rate of 2^32 becoming "unlimited") and `-days`; exit status 2 for unexpected arguments; a `help` command; one extra `version` line naming the spec draft; `tls_key` without `tls_cert` is now an error instead of being ignored. Engine tests | `cmd/singlink`, `engine` |
 | CI | GitHub Actions: gofmt, vet (also cross-compiled), `go test -race` on Linux and macOS, `go test` on Windows, 60 s fuzz smoke per target; actions pinned by SHA, read-only token | `.github/workflows/ci.yml` |
@@ -341,3 +350,78 @@ field of the FFI `SingLinkVersion` result. Regression tests:
 Still outside what this repository can demonstrate: a real NAT64 translator
 path, a multi-host shared `ReplayStore`, physical power-loss behaviour of the
 file store (Unix or Windows) and production throughput.
+
+## F-01: replayed flight answered after token expiry
+
+Reported by VPN Labs against `b924690` (their rating: Low).
+
+**Cause.** The node decided the "token expired" refusal before the durable
+replay check, and the status-only branch consulted only the per-process set
+of status-only answers, never the `ReplayStore`. A first flight admitted with
+STATUS 0 while its token was valid, replayed after the token's `not after`
+but inside the 120-second timestamp window, therefore got an authenticated
+STATUS 1 instead of the fallback, which showed that the endpoint is a
+SingLink node and that the token had expired. No destination operation
+followed, and the replayer could not decrypt the frame. SPEC §5.2 requires a
+replayed flight to be handled silently. The same gap existed for any
+status-only refusal of a flight an instance had admitted, for example after
+a destination policy was tightened between processes or across a restart.
+
+**Fix.**
+
+- Expiry is also decided against the flight timestamp. An expired-token
+  flight with `ts` earlier than `not after` + 121 s could have been admitted
+  by some instance while the token was valid; it now takes the durable path
+  (atomic `CheckAndMark`), so exactly one copy is answered across all
+  processes sharing the store, and the answer is still status 1 only, with no
+  destination operation. Later-stamped expired flights cannot have been
+  admitted by any instance and stay status-only.
+- `ReplayStore` has a new read-only method `Has(ctx, tag)`. Before every other
+  status-only answer (unknown command, capability not granted, destination
+  refused by policy) the node looks the tag up; a held tag goes to the
+  fallback exactly like a replay, byte for byte the same as a random probe.
+  The lookup writes nothing (no mark, no garbage collection, no watermark
+  update), takes the same lock as `CheckAndMark` in the reference file store
+  on Unix and Windows, and fails closed: an error, an unavailable store, a
+  clock behind the watermark or a lookup past the handshake timeout gets no
+  answer (not counted against the client address).
+- The lookup happens only when an answer could follow: a subject that has
+  used up its status-only share is dropped before it, and an expired-token
+  flight stamped too late to have been admitted needs none. A lapsed token
+  or an over-quota subject therefore cannot make the node read the store.
+- Wire format, `IDENT`, KDF, AEAD, token and signature formats and probe
+  resistance are unchanged.
+
+**Compatibility.**
+
+- Breaking for library users with their own `ReplayStore`: implement `Has`.
+  It must be linearizable with `CheckAndMark` (after any instance's
+  `CheckAndMark` returns true, every later `Has` on any instance returns true
+  until expiry, without stale replica or cache reads), judge expiry under the
+  same clock rule, and fail closed.
+- Status-only refusals now depend on the replay store being available: while
+  it is down (or the clock is behind its watermark) they get no answer, like
+  permitted flights. Expired-token flights in the window above use one
+  durable mark each, as a permitted flight does, for at most about 4 minutes
+  around each token's expiry.
+- During a rolling upgrade, instances still running `b924690` or earlier that
+  share the store keep the old behaviour until they are upgraded.
+- A replayed copy reaches the fallback after decryption and a store lookup,
+  so it can take slightly longer than a random probe. This timing difference
+  already existed for replays on the durable path.
+
+**Tests** (`singlink/replay_expiry_test.go`; every node-level test below
+fails against the `b924690` admission logic): `TestF01AdmittedThenExpiredReplaySingleProcess` (token valid for
+about 3 s, original STATUS 0, copies after expiry get exactly a random probe's
+answer), `TestF01AdmittedThenExpiredReplayAcrossProcesses`,
+`TestF01ExpiredInWindowAnsweredOnceAcrossProcesses`,
+`TestF01DurablyMarkedFlightGetsNoStatusOnlyAnswer` (capability, unknown
+command, IP-literal and port policy, each with the mark made by the same
+process and by another process),
+`TestF01PolicyRefusalOfAdmittedFlightAcrossProcesses`,
+`TestF01ConcurrentExpiredCopiesAnsweredOnce`,
+`TestF01StatusOnlyLookupFailureFailsClosed` (errors and timeouts),
+`TestF01RefusalsWithoutAnswerDoNotReadStore`, `TestF01MayHaveBeenAdmitted`,
+`TestReplayStoreHasIsReadOnly` (read-only, cross-handle, expiry, rollback,
+cancellation, lock wait, corruption). `TestNoDestinationOperationBeforeReplayCheck`
+now expects a refusal to get no answer while the store is unavailable.

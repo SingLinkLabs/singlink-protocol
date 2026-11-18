@@ -26,8 +26,19 @@ import (
 // expiry is absolute, computed on the node; a store shared by several hosts
 // MUST NOT drop a mark before that instant as seen by any of them (keep clocks
 // synchronized, or retain marks for expiry plus the maximum clock offset).
+//
+// Has is a read-only lookup: true means tag holds a mark that has not yet
+// expired. It MUST NOT add, extend or remove marks, and it MUST fail closed
+// (return an error) on unavailable/corrupt state or a clock behind the
+// store's watermark. It MUST be linearizable with CheckAndMark: once
+// CheckAndMark has returned true on any instance, every later Has on any
+// instance returns true until expiry (no stale replica or cache reads), and
+// expiry is judged under the same clock rule as CheckAndMark. A node calls it
+// before a status-only refusal so that a copy of a flight some instance
+// already admitted is handled as a replay.
 type ReplayStore interface {
 	CheckAndMark(context.Context, [32]byte, time.Time) (bool, error)
+	Has(context.Context, [32]byte) (bool, error)
 }
 
 var ErrReplayStore = errors.New("singlink: replay store unavailable or invalid")
@@ -287,6 +298,33 @@ func (s *FileReplayStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry
 		return false, err
 	}
 	return true, nil
+}
+
+// Has reports whether tag holds an unexpired mark. It takes the same lock as
+// CheckAndMark, so it observes every committed admission, and it writes
+// nothing: no mark, no garbage collection, no watermark update.
+func (s *FileReplayStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	snap, err := s.load()
+	if err != nil {
+		return false, err
+	}
+	n := s.now().UnixNano()
+	if n < snap.high {
+		return false, ErrReplayStore
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	e, ok := snap.entries[tag]
+	return ok && e > n, nil
 }
 
 // Prune removes expired marks. Like admission it never removes a mark that a
