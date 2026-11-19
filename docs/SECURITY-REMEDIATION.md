@@ -453,6 +453,7 @@ findings were reported by VPN Labs.
 | F-03 IPv6 special-purpose blocks | Informational | `3fff::/20`, `5f00::/16`, `100:0:0:1::/64` and `::ffff:0:0:0/96` refused; IPv6 outside `2000::/3` refused | `TestF03SpecialPurposeIPv6`, `TestIANASpecialPurposeBlocksDenied`, `TestIPv4TranslatedEquivalentPolicy`, `TestPolicyFingerprint` |
 | F-04 crypto slot on panic | Informational | Handshake cryptography moved into a helper that releases its slot with `defer` | `TestF04CryptoSlotReleasedOnPanic` |
 | F-10 commit identifiers | Informational | Public commit identifiers throughout; audit status aligned in SPEC, README and SECURITY.md | (documentation) |
+| Local proxy (our own review, see below) | (not a VPN Labs finding) | UDP ASSOCIATE bound to the declared client port, undeclared requests refused with authentication; plain HTTP forwarding sends only the checked request and relays one response; engine drops proxy credentials on Stop | `TestUDPAssociate*`, `TestHTTPProxy*`, `TestCredentialsClearedOnStopAndFreshOnStart` |
 
 ### F-02: declared Go toolchain
 
@@ -607,6 +608,87 @@ the node has dialled the target, and the test replay stores of the
 operations and wait for running ones before the directory is removed. Test
 code only.
 
+### Local proxy hardening (found during our own review of App F-01)
+
+These three issues were found during our own review of how the app should
+use the local proxy authentication (App F-01 of VPNL-2026-0014). They were
+not reported by VPN Labs. They concern the local SOCKS5/HTTP proxy in
+`socks5/` and `engine/`, not the protocol or the node.
+
+**SOCKS5 UDP ASSOCIATE.**
+
+- *Cause.* After a control connection (authenticated or not) opened a UDP
+  association, the relay accepted the first datagram from the control
+  connection's IP on any source port as the association's client. On
+  loopback every local process, of any user, has that IP, so one that sent
+  first could use the association, and with authentication on that meant
+  using the authenticated tunnel without the credentials. The request's
+  DST.ADDR/DST.PORT (RFC 1928: the address the client will send from) was
+  ignored.
+- *Fix.* The request declares the client's port when DST.ADDR is an IP
+  literal that is unspecified (`0.0.0.0`, `::`) or equal to the control
+  connection's IP and DST.PORT is not zero. A declared port binds the
+  association: only datagrams from the control connection's IP and that
+  port are relayed, and only that address receives replies, even if
+  another socket sends first. Any other request is undeclared: port 0, a
+  host name, or another IP (some clients, for example sing-box, put their
+  first destination there instead of their own address). With
+  authentication enabled, an undeclared request is refused with reply 2
+  (connection not allowed by ruleset), because the association could
+  otherwise be claimed by whichever local socket sends first. Without
+  authentication it is still accepted for compatibility and the first
+  datagram's source port claims the association. That leaves a race in
+  which another local process can claim it first (the legitimate client's
+  datagrams are then dropped), but gives that process nothing it could not
+  get by opening its own association on the unauthenticated port.
+- *Compatibility.* With authentication on, SOCKS5 clients must declare the
+  UDP port they send from. Clients that send `0.0.0.0:0` (for example the
+  Xray and mihomo cores) or their destination (sing-box) get reply 2 and
+  cannot use UDP through an authenticated port; TCP is unaffected. Clients
+  that declare a port must send from it, as RFC 1928 says. The residual
+  protection rests on the operating system's port ownership: a local
+  process that can bind the declared address and port itself (for example
+  with address-reuse options, normally only as the same user) is not
+  distinguished from the client.
+
+**HTTP proxy, plain requests.** CONNECT tunnels were fine: authentication
+is checked before the tunnel exists and the tunnel carries one stream. A
+plain (absolute-URI) request, however, was followed by a raw two-way copy,
+so bytes the client pipelined after the checked request reached the same
+origin unchanged: a second request with its own `Proxy-Authorization`
+header (sent to the origin, not stripped) or for another host. Now only the
+checked request and its body are written upstream; later client bytes are
+read and discarded (a client half-close is passed on, a client that goes
+away ends the upstream request). Exactly one final response is relayed,
+marked `Connection: close`, and then both connections are closed, also when
+the origin keeps its connection open. Every further request needs a new
+connection, which is checked again.
+
+**Engine credentials.** The engine kept the generated SOCKS5/HTTP
+credentials after `Stop` (and `Credentials` kept returning them). `Stop`
+and `StopClient` now drop them, as does the start of a new session, and
+the stopped proxy server's copies are dropped after it has closed. Every
+`Start` with `Auth` generates new random credentials, and those of an
+earlier session are refused. The new `Engine.StartAuth` returns the
+credentials of the session it started, and the C ABI's `SingLinkStart` uses
+it, so a concurrent `Stop` or `Start` can no longer make it report empty or
+another session's credentials. Go strings cannot be overwritten in place,
+so this removes the references rather than wiping the memory.
+
+**Tests.** `TestUDPAssociateBoundToDeclaredPort` (with and without
+authentication: a second local socket on another port, sending first and
+again later, gets no relay and no replies; the declared client works),
+`TestUDPAssociateDeclaredPortWildcardIP`,
+`TestUDPAssociateUndeclaredRefusedWithAuth`,
+`TestUDPAssociateUndeclaredWithoutAuthFirstPortWins` (documents the
+remaining unauthenticated behaviour),
+`TestUDPAssociateDestinationInRequestIsUndeclared`,
+`TestHTTPProxyForwardsOnlyTheAuthenticatedRequest`,
+`TestHTTPProxyOneResponseThenClose` (`socks5/udp_assoc_test.go`) and
+`TestCredentialsClearedOnStopAndFreshOnStart` (`engine/credentials_test.go`).
+All fail on `c59a42d` except the cases that check unchanged behaviour
+(undeclared requests without authentication), which pass there as well.
+
 ### Findings recorded as accepted design trade-offs (F-05 to F-09)
 
 VPNL-2026-0013 records five further informational findings as accepted
@@ -639,7 +721,8 @@ our position, consistent with the sections above, SPEC.md and
   proxy and many applications cannot authenticate (I-10 in
   SECURITY-AUDIT.md). The listen address is loopback only. How the app uses
   it is a client decision, reported as finding F-01 of the app audit,
-  VPNL-2026-0014.
+  VPNL-2026-0014. With `Auth` on, the local UDP relay now also requires
+  a declared client port (see "Local proxy hardening" above).
 - **F-09 forward secrecy.** The first flight is not forward secret, and
   there is no post-quantum forward secrecy. SPEC §5.4 lists exactly what is
   exposed if a node's static key is later compromised, recommends regular

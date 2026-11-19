@@ -22,6 +22,8 @@ func (e *Engine) begin() *startAttempt {
 		return nil
 	}
 	e.generation++
+	// A new session never shows credentials of an earlier one.
+	e.user, e.pass = "", ""
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &startAttempt{id: e.generation, ctx: ctx, cancel: cancel}
 	e.pending = a
@@ -83,8 +85,12 @@ func (e *Engine) stopOwned(c *singlink.Client, matched bool) bool {
 	}
 	e.generation++
 	pending, stop := e.pending, e.stop
-	// Like the original Stop, keep listen/credentials/lastErr for Status.
+	// Like the original Stop, keep listen/lastErr for Status. The proxy
+	// credentials are dropped: they belong to the stopped port, and the
+	// next Start with Auth generates new ones. (Go strings cannot be wiped
+	// in place; this drops the engine's references.)
 	e.pending, e.stop, e.client = nil, nil, nil
+	e.user, e.pass = "", ""
 	e.mu.Unlock()
 	if pending != nil {
 		pending.cancel()

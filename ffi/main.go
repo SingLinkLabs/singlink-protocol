@@ -94,10 +94,10 @@ func SingLinkStart(config *C.char) (res *C.char) {
 	if err := json.Unmarshal([]byte(C.GoString(config)), &cfg); err != nil {
 		return fail(err)
 	}
-	if err := eng.Start(cfg.Link, cfg.Listen, engine.Options{Auth: cfg.Auth}); err != nil {
+	user, pass, err := eng.StartAuth(cfg.Link, cfg.Listen, engine.Options{Auth: cfg.Auth})
+	if err != nil {
 		return fail(err)
 	}
-	user, pass := eng.Credentials()
 	return out(map[string]any{"ok": true, "username": user, "password": pass})
 }
 

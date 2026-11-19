@@ -50,7 +50,9 @@ type Engine struct {
 // Options tunes Start.
 type Options struct {
 	// Auth requires a random SOCKS5 username/password (returned by
-	// Credentials) so other local users and apps cannot use the tunnel.
+	// Credentials, new for every Start, dropped by Stop) so other local
+	// users and apps cannot use the tunnel. SOCKS5 UDP ASSOCIATE then needs
+	// the client's UDP source address in the request (see socks5.Server).
 	// Leave it off when the port is used as the system proxy, since many
 	// applications do not support SOCKS5 authentication.
 	Auth bool
@@ -65,16 +67,32 @@ func (e *Engine) Start(link, listen string, opts ...Options) error {
 	if len(opts) > 0 {
 		o = opts[0]
 	}
+	_, _, err := e.StartAuth(link, listen, o)
+	return err
+}
+
+// StartAuth is Start that also returns the credentials generated for this
+// session ("" without Auth). Unlike calling Credentials after Start, the
+// result cannot belong to another session started or stopped in between.
+func (e *Engine) StartAuth(link, listen string, o Options) (user, pass string, err error) {
 	a := e.begin()
 	if a == nil {
-		return errors.New("already running")
+		return "", "", errors.New("already running")
 	}
 	c, s, addr, user, pass, err := start(a.ctx, link, listen, o)
 	var stop func()
 	if s != nil {
-		stop = func() { s.Close() }
+		stop = func() {
+			// Close waits for every handler, so the credentials can be
+			// dropped afterwards without a race.
+			s.Close()
+			s.Username, s.Password = "", ""
+		}
 	}
-	return e.finish(a, c, stop, addr, user, pass, err)
+	if err := e.finish(a, c, stop, addr, user, pass, err); err != nil {
+		return "", "", err
+	}
+	return user, pass, nil
 }
 
 // StartWith verifies the node in link like Start and then hands the client
@@ -142,7 +160,8 @@ func randomToken() string {
 	return singlink.B64.EncodeToString(b)
 }
 
-// Credentials returns the SOCKS5 username and password ("" without Auth).
+// Credentials returns the SOCKS5 username and password of the running (or
+// starting) session; "" without Auth and after Stop.
 func (e *Engine) Credentials() (string, string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

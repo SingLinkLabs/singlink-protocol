@@ -31,8 +31,11 @@ import (
 // Server accepts SOCKS5 clients.
 type Server struct {
 	Client *singlink.Client
-	// Username and Password, if set, require RFC 1929 authentication so
-	// other local users and apps cannot borrow the tunnel.
+	// Username and Password, if set, require RFC 1929 authentication (Basic
+	// for HTTP) so other local users and apps cannot borrow the tunnel. With
+	// them, UDP ASSOCIATE must declare the client's UDP source port (see
+	// associate); an undeclared request is refused (reply 2, not allowed by
+	// ruleset).
 	Username, Password string
 	// MaxSessions caps concurrent client connections (default 512).
 	MaxSessions int
@@ -226,7 +229,7 @@ func (s *Server) handle(raw net.Conn) {
 	case cmdConnect:
 		s.connect(c, dst)
 	case cmdAssociate:
-		s.associate(c)
+		s.associate(c, dst)
 	default:
 		reply(c, repCmdNotSupp, nil)
 	}
@@ -317,7 +320,39 @@ func (s *Server) handleHTTP(c *bufConn) {
 	if err := req.Write(up); err != nil {
 		return
 	}
-	pipe(c, up)
+	// Only this request (and its body, written above) goes upstream. Bytes
+	// the client sends after it, such as a pipelined second request with
+	// its Proxy-Authorization header or for another host, are never
+	// forwarded: each plain request needs its own connection, checked for
+	// authentication like this one. They are read and discarded; when the
+	// client half-closes, the upstream is half-closed as well, and when the
+	// client goes away, the upstream request ends.
+	go func() {
+		if _, err := io.Copy(io.Discard, c); err != nil {
+			up.Close()
+		} else {
+			up.CloseWrite()
+		}
+	}()
+	// Relay exactly one final response, marked "Connection: close" so the
+	// client does not reuse the connection, then close both sides even if
+	// the origin keeps its connection open.
+	br := bufio.NewReader(up)
+	for {
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			return
+		}
+		final := resp.StatusCode < 100 || resp.StatusCode >= 200 || resp.StatusCode == http.StatusSwitchingProtocols
+		if final {
+			resp.Close = true
+		}
+		err = resp.Write(c)
+		resp.Body.Close()
+		if err != nil || final {
+			return
+		}
+	}
 }
 
 func (s *Server) httpAuthOK(req *http.Request) bool {
@@ -355,7 +390,38 @@ func (s *Server) connect(c net.Conn, dst string) {
 	pipe(c, up)
 }
 
-func (s *Server) associate(c net.Conn) {
+// associate serves UDP ASSOCIATE. declared is the request's DST.ADDR and
+// DST.PORT: the address the client will send its datagrams from (RFC 1928
+// §6), or a zero port when the client does not know it yet.
+//
+// Only the client that opened the association may use it. Datagrams must
+// come from the control connection's IP address. A port counts as declared
+// when DST.ADDR is an IP literal that is unspecified (0.0.0.0, ::) or equal
+// to the control connection's IP, and DST.PORT is not zero; datagrams must
+// then come from that port, so no other local socket can use the
+// association or receive its replies, even one that sends first. Anything
+// else (port 0, a host name, or another IP, as sent by clients that put the
+// first destination there) is undeclared: the first datagram's source port
+// claims the association, and another local process could win that race.
+// That is acceptable only when the port needs no authentication (any local
+// process can then open its own association anyway); with authentication an
+// undeclared request is refused, so an unauthenticated process can never
+// use an authenticated association.
+func (s *Server) associate(c net.Conn, declared string) {
+	ctlIP := netip.Addr{}
+	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+		ctlIP = ap.Addr().Unmap()
+	}
+	var declPort uint16
+	if ap, err := netip.ParseAddrPort(declared); err == nil && ap.Port() != 0 {
+		if ip := ap.Addr().Unmap(); ip.IsUnspecified() || (ctlIP.IsValid() && ip == ctlIP) {
+			declPort = ap.Port()
+		}
+	}
+	if declPort == 0 && s.Username != "" {
+		reply(c, repNotAllowed, nil)
+		return
+	}
 	local, ok := c.LocalAddr().(*net.TCPAddr)
 	if !ok {
 		reply(c, repFailure, nil)
@@ -390,10 +456,6 @@ func (s *Server) associate(c net.Conn) {
 
 	var peerMu sync.Mutex
 	var peer netip.AddrPort
-	ctlIP := netip.Addr{}
-	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
-		ctlIP = ap.Addr().Unmap()
-	}
 	done := make(chan struct{})
 	go func() {
 		// The association lives as long as the TCP control connection.
@@ -434,9 +496,11 @@ func (s *Server) associate(c net.Conn) {
 			continue
 		}
 		// Only the application that opened the association may use it:
-		// same IP as the control connection, first source port wins.
+		// same IP as the control connection and the declared port, or,
+		// without a declared port, the first source port (see above).
+		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		peerMu.Lock()
-		if from.Addr().Unmap() != ctlIP || (peer.IsValid() && peer != from) {
+		if !ctlIP.IsValid() || from.Addr() != ctlIP || (declPort != 0 && from.Port() != declPort) || (peer.IsValid() && peer != from) {
 			peerMu.Unlock()
 			continue
 		}
