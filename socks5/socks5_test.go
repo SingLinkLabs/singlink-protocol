@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,19 +140,25 @@ func newTestServer(t *testing.T) (*Server, string) {
 // I-11: Close must not hang while a CONNECT is open.
 func TestCloseWithOpenConnect(t *testing.T) {
 	s, addr := newTestServer(t)
-	hold, _ := net.Listen("tcp", "127.0.0.1:0")
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer hold.Close()
+	accepted := make(chan net.Conn, 1)
 	go func() {
-		for {
-			c, err := hold.Accept()
-			if err != nil {
-				return
-			}
-			defer c.Close() // silent target
+		c, err := hold.Accept()
+		if err != nil {
+			return
 		}
+		accepted <- c // silent target, closed by the test
 	}()
-	conn, _ := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	conn.Write([]byte{5, 1, 0})
 	buf := make([]byte, 16)
 	io.ReadFull(conn, buf[:2])
@@ -159,7 +166,15 @@ func TestCloseWithOpenConnect(t *testing.T) {
 	conn.Write(append(append([]byte{5, 1, 0, 1}, ha.IP.To4()...), byte(ha.Port>>8), byte(ha.Port)))
 	io.ReadFull(conn, buf[:10])
 	conn.Write([]byte("data"))
-	time.Sleep(300 * time.Millisecond)
+	// Wait until the node has admitted the request and dialled the target,
+	// so the CONNECT is really open and no handshake is still using the
+	// replay store when the test cleans up.
+	select {
+	case c := <-accepted:
+		defer c.Close()
+	case <-time.After(10 * time.Second):
+		t.Fatal("the node never dialled the target")
+	}
 	done := make(chan struct{})
 	go func() { s.Close(); close(done) }()
 	select {
@@ -271,5 +286,54 @@ func testReplayStore(t *testing.T) singlink.ReplayStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	// Registered after t.TempDir, so it runs before the directory is
+	// removed: it waits for store operations still running in node handlers
+	// (which outlive the test) and refuses new ones. Otherwise Windows can
+	// fail the cleanup with "directory is not empty" while a handler writes
+	// a snapshot.
+	cs := &closingStore{store: s}
+	t.Cleanup(cs.close)
+	return cs
+}
+
+// closingStore wraps a test replay store so that it can be shut down before
+// its directory is removed.
+type closingStore struct {
+	store  singlink.ReplayStore
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
+}
+
+func (c *closingStore) enter() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.active.Add(1)
+	return true
+}
+
+func (c *closingStore) close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.active.Wait()
+}
+
+func (c *closingStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry time.Time) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.CheckAndMark(ctx, tag, expiry)
+}
+
+func (c *closingStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.Has(ctx, tag)
 }

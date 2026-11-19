@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -20,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -386,10 +388,14 @@ func startNode(t *testing.T) string {
 	key, _ := singlink.GenerateServerKey()
 	issuer, _ := singlink.GenerateEd25519()
 	device, _ := singlink.GenerateEd25519()
-	store, err := singlink.InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
+	file, err := singlink.InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Runs before t.TempDir's cleanup: waits for store operations of node
+	// handlers that outlive the test, so Windows can remove the directory.
+	store := &closingStore{store: file}
+	t.Cleanup(store.close)
 	srv, err := singlink.NewServer(singlink.ServerConfig{Key: key, ReplayStore: store, Issuers: singlink.NewIssuers(issuer.Public().(ed25519.PublicKey)),
 		BlockedPorts: []uint16{443}, FlightIdle: 5 * time.Millisecond})
 	if err != nil {
@@ -452,4 +458,46 @@ func TestClientAndDemoCommands(t *testing.T) {
 			t.Fatalf("%s: unknown flag", cmd)
 		}
 	}
+}
+
+// closingStore lets a test node's replay store be shut down before its
+// directory is removed.
+type closingStore struct {
+	store  singlink.ReplayStore
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
+}
+
+func (c *closingStore) enter() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.active.Add(1)
+	return true
+}
+
+func (c *closingStore) close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.active.Wait()
+}
+
+func (c *closingStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry time.Time) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.CheckAndMark(ctx, tag, expiry)
+}
+
+func (c *closingStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.Has(ctx, tag)
 }

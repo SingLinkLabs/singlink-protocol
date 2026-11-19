@@ -3,9 +3,9 @@
 package engine
 
 // Regression test ported from the 2026-11-13 third-party source audit of
-// commit 78cde5e (finding P-04). The audit's reproduction passed while the
+// commit 9b04898 (finding P-04). The audit's reproduction passed while the
 // defect existed; this version asserts the safe behaviour and fails on
-// 78cde5e. Synthetic keys and loopback only; destination 443 is blocked by
+// 9b04898. Synthetic keys and loopback only; destination 443 is blocked by
 // the test node before any DNS lookup or dial.
 
 import (

@@ -1,24 +1,35 @@
-# Security remediation: 2026-11-13 source audit
+# Security remediation: third-party source audits
+
+This document records the third-party source audit of 2026-11-13 (first
+sections), its 2026-11-17 re-audit follow-up, and the VPN Labs audit
+VPNL-2026-0013 (sections F-01 and "VPN Labs follow-up (2026-11-19)").
+
+## 2026-11-13 source audit
 
 This change set addresses the five findings of the 2026-11-13 third-party
-source audit against the open-source protocol baseline `78cde5ee`. It is not a
+source audit against the open-source protocol baseline `9b04898`. It is not a
 claim about the current commercial service and does not alter the earlier audit
 evidence or report.
 
+Commit identifiers in this document refer to the public history of this
+repository. Earlier revisions of this document cited identifiers from a
+history that was rewritten before publication; each was replaced by the
+public commit with the same change and the same resulting tree.
+
 Each audit reproduction was ported as a `TestAudit*` regression test that
-asserts the safe behaviour. All of them fail on `78cde5ee` and pass after the
+asserts the safe behaviour. All of them fail on `9b04898` and pass after the
 fixes (the cryptographic control test passes on both).
 
 | Finding | Severity | Fix commits | Regression tests | Compatibility notes |
 |---|---|---|---|---|
-| P-01 first-flight replay across restart / instances | Medium | `6a7cd58`, `26c1707`, `b8e6fd7`, `24b6b19` | `TestAuditP01ReplayRejectedAcrossInstances`, `TestFutureFlightRejectedAcrossRestart`, `TestSharedReplayStoreMixedAcceptanceWindows`, `TestUnsupportedReplayWindowRefusesStartup`, `TestReplayStore*` (restart/capacity, independent instances, concurrent processes, abrupt exit, lock cancellation, GC and clock rollback, missing/corrupt/permissions, opaque content, prune), `TestReplayTagIsKeyedAndStable` | **Breaking for operators:** a node needs `replay_file` (or a `ReplayStore`) provisioned once with `singlink replay-init`; startup fails closed without it. The library `ServerConfig.MaxTimeSkew` above 120 s is refused (the CLI has no such setting). The reference file store handles roughly tens to about a hundred handshakes per second (see below). Multi-host deployments sharing a key need an external shared atomic store. Library: `NewServer` without a store returns `ErrReplayStore`. |
-| P-02 revocation list partial / non-atomic reload | Medium | `6a7cd58`, `b8e6fd7`, `24b6b19` | `TestAuditP02OversizedRevocationRetainsLastGood`, `TestAuditP02CorrectedRevocationClosesLiveSession`, `TestRevocationFailuresRetainLastGood`, `TestInvalidInitialRevocationListRefusesStartup`, `TestRevocationDuringAdmissionClosesSession` | A configured revocation file that is missing or invalid at startup refuses startup. An invalid update keeps the last good list and logs a warning. Stricter format: a zero-byte or comment-only file, lines with extra fields or trailing comments, unknown kinds, lines over 64 KiB and files over 4 MiB are invalid; write `empty` to clear the list. |
-| P-03 NAT64 equivalents bypass custom/local policy | Medium | `6a7cd58`, `627d776` | `TestAuditP03NAT64EquivalentPolicy`, `TestNAT64EquivalentPolicies`, `TestNAT64CachedPolicyIsRechecked` | None. The dial target is unchanged; only `64:ff9b::/96` is translated for policy. |
-| P-04 Stop during pending engine start | Low | `6a7cd58` | `TestAuditP04StopDuringPendingStart`, `TestStopInvalidatesOldTransportCompletion`, `TestStopCancelsPendingHandshake`, `TestOldErrorCannotOverwriteNewLifecycle`, `TestStopClientOwnsPendingAndActiveGeneration` | None for existing callers; `Stop` keeps `Status().Listen`/`LastError` as before. A startup cancelled by `Stop` now returns an error (`context.Canceled`). Additive Go API `Engine.StopClient`. C ABI unchanged. |
-| P-05 early bytes skip the subject rate limit | Medium | `6a7cd58` | `TestAuditP05EarlyBytesShareSubjectBucket`, `TestEarlyPayloadSharesSubjectBudget`, `TestEarlyPayloadUnlimitedAndPartialWrite` | Rate-limited accounts may see the first application bytes wait for their bucket, as already advertised. Unlimited accounts and UDP are unchanged. |
+| P-01 first-flight replay across restart / instances | Medium | `fd7c848`, `fe55c57`, `8dba7e2`, `1a992f1` | `TestAuditP01ReplayRejectedAcrossInstances`, `TestFutureFlightRejectedAcrossRestart`, `TestSharedReplayStoreMixedAcceptanceWindows`, `TestUnsupportedReplayWindowRefusesStartup`, `TestReplayStore*` (restart/capacity, independent instances, concurrent processes, abrupt exit, lock cancellation, GC and clock rollback, missing/corrupt/permissions, opaque content, prune), `TestReplayTagIsKeyedAndStable` | **Breaking for operators:** a node needs `replay_file` (or a `ReplayStore`) provisioned once with `singlink replay-init`; startup fails closed without it. The library `ServerConfig.MaxTimeSkew` above 120 s is refused (the CLI has no such setting). The reference file store handles roughly tens to about a hundred handshakes per second (see below). Multi-host deployments sharing a key need an external shared atomic store. Library: `NewServer` without a store returns `ErrReplayStore`. |
+| P-02 revocation list partial / non-atomic reload | Medium | `fd7c848`, `8dba7e2`, `1a992f1` | `TestAuditP02OversizedRevocationRetainsLastGood`, `TestAuditP02CorrectedRevocationClosesLiveSession`, `TestRevocationFailuresRetainLastGood`, `TestInvalidInitialRevocationListRefusesStartup`, `TestRevocationDuringAdmissionClosesSession` | A configured revocation file that is missing or invalid at startup refuses startup. An invalid update keeps the last good list and logs a warning. Stricter format: a zero-byte or comment-only file, lines with extra fields or trailing comments, unknown kinds, lines over 64 KiB and files over 4 MiB are invalid; write `empty` to clear the list. |
+| P-03 NAT64 equivalents bypass custom/local policy | Medium | `fd7c848`, `3c201dd` | `TestAuditP03NAT64EquivalentPolicy`, `TestNAT64EquivalentPolicies`, `TestNAT64CachedPolicyIsRechecked` | None. The dial target is unchanged; only `64:ff9b::/96` is translated for policy. |
+| P-04 Stop during pending engine start | Low | `fd7c848` | `TestAuditP04StopDuringPendingStart`, `TestStopInvalidatesOldTransportCompletion`, `TestStopCancelsPendingHandshake`, `TestOldErrorCannotOverwriteNewLifecycle`, `TestStopClientOwnsPendingAndActiveGeneration` | None for existing callers; `Stop` keeps `Status().Listen`/`LastError` as before. A startup cancelled by `Stop` now returns an error (`context.Canceled`). Additive Go API `Engine.StopClient`. C ABI unchanged. |
+| P-05 early bytes skip the subject rate limit | Medium | `fd7c848` | `TestAuditP05EarlyBytesShareSubjectBucket`, `TestEarlyPayloadSharesSubjectBudget`, `TestEarlyPayloadUnlimitedAndPartialWrite` | Rate-limited accounts may see the first application bytes wait for their bucket, as already advertised. Unlimited accounts and UDP are unchanged. |
 
-Scope of the next statement: the five fixes above (commits `6a7cd58`,
-`26c1707`, `b8e6fd7`, `24b6b19`, `627d776`). Within that remediation set the
+Scope of the next statement: the five fixes above (commits `fd7c848`,
+`3c201dd`, `fe55c57`, `8dba7e2`, `1a992f1`). Within that remediation set the
 wire format, KDF, AEAD, token and signature formats are unchanged. It does
 **not** describe spec draft 4 (commit `ddfd0d7`), a separate change that
 replaced `IDENT` and therefore every derived handshake key; draft 3 and draft 4
@@ -269,7 +280,9 @@ credential copy are never seen.
 The original address and supported NAT64-embedded IPv4 equivalent receive the
 same custom CIDR, private/special-use and node-own-address checks, including the
 DNS cache route. The actual dial address is unchanged. Supported translation is
-the well-known `64:ff9b::/96` prefix; network-specific translation prefixes need
+the well-known `64:ff9b::/96` prefix (and, since the VPN Labs follow-up below,
+the IPv4-translated format `::ffff:0:0:0/96`, which the default policy refuses
+outright); network-specific translation prefixes need
 separate configuration/design. With the default policy, the local-use prefix
 `64:ff9b:1::/48` and other special ranges are denied outright. With
 `allow_private` set, IPv4 addresses embedded in network-specific prefixes are not
@@ -425,3 +438,210 @@ process and by another process),
 `TestReplayStoreHasIsReadOnly` (read-only, cross-handle, expiry, rollback,
 cancellation, lock wait, corruption). `TestNoDestinationOperationBeforeReplayCheck`
 now expects a refusal to get no answer while the store is unavailable.
+
+## VPN Labs follow-up (2026-11-19)
+
+VPN Labs audited this repository at `b924690` (report VPNL-2026-0013,
+<https://vpn.com.de/reports/VPNL-2026-0013>) and confirmed the F-01 fix
+above at `7822e49`. This section covers the remaining protocol findings.
+File and line references in the report are to `b924690`; all of these
+findings were reported by VPN Labs.
+
+| Finding | Their rating | Change | Tests |
+|---|---|---|---|
+| F-02 Go toolchain | Low | `go 1.26.11` and `toolchain go1.27.4` in `go.mod`; CI on 1.26.x and stable; govulncheck in CI; Makefile release check | CI jobs `test`, `govulncheck`; `make check-go`, `make vulncheck` |
+| F-03 IPv6 special-purpose blocks | Informational | `3fff::/20`, `5f00::/16`, `100:0:0:1::/64` and `::ffff:0:0:0/96` refused; IPv6 outside `2000::/3` refused | `TestF03SpecialPurposeIPv6`, `TestIANASpecialPurposeBlocksDenied`, `TestIPv4TranslatedEquivalentPolicy`, `TestPolicyFingerprint` |
+| F-04 crypto slot on panic | Informational | Handshake cryptography moved into a helper that releases its slot with `defer` | `TestF04CryptoSlotReleasedOnPanic` |
+| F-10 commit identifiers | Informational | Public commit identifiers throughout; audit status aligned in SPEC, README and SECURITY.md | (documentation) |
+
+### F-02: declared Go toolchain
+
+**Cause.** `go.mod` declared `go 1.24` and no toolchain, CI tested Go 1.24.x
+and the Makefile built with whatever `go` was on `PATH`. Go 1.24 is no longer
+supported; with its last release, go1.24.13, govulncheck v1.10.0 reports 25
+standard-library vulnerabilities reachable from this module, each fixed only
+in Go 1.25 or later.
+
+**Fix.**
+
+- `go.mod` declares `go 1.26.11` (the oldest supported release line, at a
+  patch release with no reachable advisory) and `toolchain go1.27.4` (the
+  current release). With the default `GOTOOLCHAIN=auto` the go command
+  switches to go1.27.4 when the installed toolchain is older. A toolchain
+  older than 1.26.11 is not used for this module, also when it is built as
+  a dependency: the go command (Go 1.21 and later) switches to a newer one
+  or, with `GOTOOLCHAIN=local`, refuses to build.
+- CI tests the newest Go 1.26.x (Linux with the race detector, Windows) and
+  the current stable release (Linux, macOS, Windows) with `GOTOOLCHAIN=local`, so each
+  job tests the toolchain it installed. Go 1.24.x is gone from the matrix.
+- A new CI job runs govulncheck v1.10.0 (installed by exact module version,
+  verified through the Go checksum database) with exactly the `go` and the
+  `toolchain` versions from `go.mod`, and fails on any reachable
+  vulnerability. Actions stay pinned by commit SHA, and every checkout uses
+  `persist-credentials: false`.
+- `make cli`, `make lib` and `make linux` refuse a toolchain older than the
+  `toolchain` line (`make check-go`), for example when `GOTOOLCHAIN=local`
+  selects an older installed Go. `make vulncheck` runs govulncheck.
+
+**Result** (govulncheck v1.10.0, database of 2026-11-11, `./...`): with
+go1.24.13 at `7822e49`, 25 reachable vulnerabilities (as reported); with
+go1.26.11 and go1.27.4, before and after this change, none.
+
+### F-03: IPv6 special-purpose blocks
+
+**Cause.** The built-in list predated three registry entries:
+`3fff::/20` (documentation, RFC 9637), `5f00::/16` (SRv6 SIDs, RFC 9602)
+and `100:0:0:1::/64` (dummy prefix, RFC 9780). The IPv4-translated format of
+RFC 2765 (`::ffff:0:0:0/96`), which is not in the registry, was not listed
+either. `publicIP` and the configuration check accepted, for example,
+`3fff::1`, `5f00::1` and `::ffff:0:a00:1`.
+
+**Fix.**
+
+- The list was compared entry by entry with the IANA IPv4 and IPv6
+  Special-Purpose Address Registries (as published on 2026-11-19). Every
+  block that is not globally reachable is refused; each entry in
+  `singlink/policy.go` names its RFC. The IPv4 list was already complete.
+  Blocks that are only partly globally reachable stay refused as a whole,
+  as before: `192.0.0.0/24` (including the PCP and TURN anycast addresses
+  `192.0.0.9` and `192.0.0.10`) and `2001::/23` (including the anycast
+  addresses `2001:1::1`, `2001:1::2` and `2001:1::3`, AMT `2001:3::/32`,
+  AS112-v6 `2001:4:112::/48`, ORCHIDv2 `2001:20::/28` and DETs
+  `2001:30::/28`). The globally reachable blocks outside them (AS112-v4
+  `192.31.196.0/24`, AMT `192.52.193.0/24`, `192.175.48.0/24` and
+  `2620:4f:8000::/48`) stay allowed.
+- Any IPv6 destination outside `2000::/3` is refused. IANA assigns global
+  unicast addresses only from `2000::/3`; the rest is reserved by the IETF,
+  special purpose or multicast. `5f00::/16` and `100:0:0:1::/64` were both
+  assigned from that reserved space, so this also covers later assignments
+  there. The well-known NAT64 prefix `64:ff9b::/96` keeps its existing
+  handling (its embedded IPv4 address is checked).
+- IPv4-translated addresses (`::ffff:0:0:0/96`) are refused by the default
+  policy whatever IPv4 address they embed: the format was obsoleted by
+  RFC 6145 and RFC 6052, and a public node has no reason to dial it. Like
+  the NAT64 and IPv4-mapped forms, its embedded IPv4 address is also matched
+  against `deny_cidrs`, so with `allow_private` a denied IPv4 range cannot
+  be reached through it. IPv4-mapped addresses are still checked, and
+  dialled, as the IPv4 address they map.
+- An address carrying an IPv6 zone (which no prefix matches) is refused.
+  None can reach the check today: the wire format has no zone and the
+  resolver strips it.
+- The `policy=` fingerprint now also covers the built-in ranges, so nodes
+  running releases with different built-in lists show different
+  fingerprints even with the same configuration. The fingerprint of an
+  unchanged configuration therefore changes with this release.
+
+**Compatibility.** Destinations in the newly refused ranges get status 4
+(forbidden destination), or a name resolving only to them gets status 7, as
+for the other special-purpose ranges. None of them is globally routable.
+With `allow_private`, only the `deny_cidrs` match on IPv4-translated
+addresses is new. As before, all instances that accept the same keys must
+run the same destination policy: upgrade them together, since an instance
+still running the older list would accept destinations the newer one
+refuses.
+
+**Tests** (`singlink/policy_special_test.go`; they fail on `7822e49`):
+`TestF03SpecialPurposeIPv6` (`publicIP`, `configAllowed`, `configStatus`
+and `resolve` for `3fff::1`, `5f00::1`, `100:0:0:1::1`, `::ffff:0:a00:1`,
+`::ffff:0:808:808` and addresses in each IETF-reserved range, with
+globally reachable controls such as `3fff:1000::1`, `2620:4f:8000::1` and
+`192.31.196.1`), `TestIANASpecialPurposeBlocksDenied` (first and last
+address of every registry entry that is not globally reachable, IPv4 also
+in IPv4-mapped form), `TestIPv4TranslatedEquivalentPolicy`, `TestZonedAddressRefused`, and an
+addition to `TestPolicyFingerprint`.
+
+### F-04: handshake cryptography slot on panic
+
+**Cause.** `handle` took a slot from the bounded handshake cryptography
+semaphore (2 × the number of CPUs) and returned it without `defer`. The
+handler's `recover` keeps the node running after a panic, but a panic
+between the two statements would have kept the slot, and after enough such
+panics every new handshake would have blocked. No input is known to cause a
+panic there; the finding is about robustness.
+
+**Fix.** Decryption, token verification and the proof-of-possession check
+now run in `Server.authenticate`, which takes the slot and releases it with
+`defer`. Behaviour is otherwise unchanged. The other acquire/release pairs
+in the node were reviewed: connection slots, per-IP handshake counts and
+per-subject connection counts already release with `defer` or on every
+path, and the remaining short lock sections only read or write maps or cancel
+contexts. The
+resolver's DNS cache lookup re-checked a cached address (which reads the
+node's interface addresses) while holding the cache lock; that check now
+runs after the lock is released.
+
+**Tests.** `TestF04CryptoSlotReleasedOnPanic` (`singlink/crypto_slot_test.go`)
+injects a panic into the cryptography section through a test-only hook, for
+two more handshakes than there are slots, checks that no slot is held
+afterwards and that a normal handshake then relays data. Against `7822e49`
+it fails with every slot held and the next handshake blocked.
+
+### F-10: commit identifiers and audit status
+
+**Cause.** The remediation table above cited commit identifiers from a
+history that was rewritten before publication. SPEC.md still said that the
+protocol had not had an independent third-party audit, while this document
+described the 2026-11-13 third-party source audit.
+
+**Fix.** Each identifier was matched to the public commit with the same
+patch (`git patch-id`) and the same resulting tree, and replaced: the audit
+baseline is `9b04898`, the fixes are `fd7c848`, `3c201dd`, `fe55c57`,
+`8dba7e2` and `1a992f1`, and the internal review of
+[SECURITY-AUDIT.md](SECURITY-AUDIT.md) refers to `6cd1884`. Every commit
+identifier in the repository's documentation and comments was checked to be
+reachable from the public `main` branch. Commit messages already in the
+public history are not rewritten. SPEC.md, both READMEs, SECURITY.md and
+the internal review now state that the code has had third-party source
+audits (2026-11-13, and VPN Labs, VPNL-2026-0013), that an audit is not a
+guarantee or a formal proof, and that the protocol is still a draft.
+
+### Test reliability on Windows
+
+`socks5.TestCloseWithOpenConnect` occasionally failed on Windows CI with
+"The directory is not empty" while removing its temporary directory. The
+test closed after a fixed 300 ms sleep, which over raw TCP is shorter than
+the node's 500 ms end-of-flight rule, so the node could still be writing a
+replay snapshot into that directory during cleanup. The test now waits until
+the node has dialled the target, and the test replay stores of the
+`singlink`, `socks5`, `engine` and `cmd/singlink` tests refuse new
+operations and wait for running ones before the directory is removed. Test
+code only.
+
+### Findings recorded as accepted design trade-offs (F-05 to F-09)
+
+VPNL-2026-0013 records five further informational findings as accepted
+design trade-offs. We agree with that classification and make no change;
+our position, consistent with the sections above, SPEC.md and
+[SECURITY-AUDIT.md](SECURITY-AUDIT.md):
+
+- **F-05 replay-store throughput and capacity.** The reference file store is
+  a correctness-oriented backend, not a high-throughput one, and admission
+  fails closed when it is slow or full. The measured rates and the guidance
+  to benchmark storage and provide a faster external `ReplayStore` for busy
+  nodes are under "Supported backend and durability boundary" above. The
+  read-only lookups added by F-01 take the store lock without writing; they
+  happen only while a subject still has room in its status-only share, and
+  like every handshake they are limited by the per-address and global
+  pre-authentication caps.
+- **F-06 status-only refusals replay-protected per process.** Since
+  `7822e49` this applies only to flights that were refused and never
+  admitted; the limits and the requirement of a common destination policy
+  are under "Admission order" above.
+- **F-07 pre-authentication limits per source address.** The limits are
+  keyed by the full source address. Clients behind a shared NAT address
+  share its budget, and a holder of an IPv6 /64 can spread over many
+  addresses; the global connection cap and the concurrent decapsulation cap
+  still bound the node as a whole. Operators who need per-prefix limits can
+  add them in front of the node (firewall or load balancer).
+- **F-08 unauthenticated local proxy by default.** `engine.Options.Auth`
+  enables random SOCKS5/HTTP proxy credentials. It stays off by default at
+  the library level because the desktop client uses the port as the system
+  proxy and many applications cannot authenticate (I-10 in
+  SECURITY-AUDIT.md). The listen address is loopback only. How the app uses
+  it is a client decision, reported as finding F-01 of the app audit,
+  VPNL-2026-0014.
+- **F-09 forward secrecy.** The first flight is not forward secret, and
+  there is no post-quantum forward secrecy. SPEC §5.4 lists exactly what is
+  exposed if a node's static key is later compromised, recommends regular
+  node key rotation, and SPEC §11 keeps post-quantum forward secrecy as an
+  open item.

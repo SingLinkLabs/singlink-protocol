@@ -1,9 +1,13 @@
 # Copyright 2026 SingLinkVPN (https://singlinkvpn.com)
 # SPDX-License-Identifier: Apache-2.0
 #
-# Format, vet, tests (race detector on Linux and macOS, plain on Windows) and
-# a 60 s fuzz smoke per target. Actions are pinned by full commit SHA; the
-# workflow only reads the repository.
+# Format, vet, tests (race detector on Linux and macOS, plain on Windows), a
+# 60 s fuzz smoke per target and govulncheck. Tests run on the oldest
+# supported Go line (go.mod's go directive) and on the current stable release;
+# govulncheck runs with exactly the minimum (go directive) and the release
+# toolchain (toolchain directive) named in go.mod and fails on any reachable
+# vulnerability. Actions are pinned by full commit SHA; the workflow only
+# reads the repository.
 name: CI
 
 on:
@@ -14,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # Test the toolchain each job installed; never switch to another one.
+  GOTOOLCHAIN: local
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -28,10 +36,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, go: "1.24.x", race: true, lint: false }
+          - { os: ubuntu-latest, go: "1.26.x", race: true, lint: false }
           - { os: ubuntu-latest, go: stable, race: true, lint: true }
           - { os: macos-latest, go: stable, race: true, lint: false }
-          - { os: windows-latest, go: "1.24.x", race: false, lint: false }
+          - { os: windows-latest, go: "1.26.x", race: false, lint: false }
           - { os: windows-latest, go: stable, race: false, lint: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,6 +48,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ matrix.go }}
+          # Always the newest patch of the line, not an older one cached on
+          # the runner image (go.mod needs at least 1.26.11).
+          check-latest: true
           cache: false
       - name: gofmt
         if: matrix.lint
@@ -89,3 +100,41 @@ jobs:
           path: singlink/testdata/fuzz
           if-no-files-found: ignore
           retention-days: 14
+
+  govulncheck:
+    name: govulncheck (${{ matrix.directive }} in go.mod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        directive: [go, toolchain]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Go version from go.mod
+        id: version
+        env:
+          DIRECTIVE: ${{ matrix.directive }}
+        run: |
+          v="$(awk -v d="$DIRECTIVE" '$1 == d { sub(/^go/, "", $2); print $2 }' go.mod)"
+          case "$v" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "go.mod has no exact '$DIRECTIVE' version: '$v'"; exit 1 ;;
+          esac
+          echo "go=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ steps.version.outputs.go }}
+          cache: false
+      - name: check the toolchain
+        env:
+          WANT: go${{ steps.version.outputs.go }}
+        run: test "$(go env GOVERSION)" = "$WANT"
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+      - name: govulncheck
+        run: |
+          "$(go env GOPATH)/bin/govulncheck" -version
+          "$(go env GOPATH)/bin/govulncheck" ./...

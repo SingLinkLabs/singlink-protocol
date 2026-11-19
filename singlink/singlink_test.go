@@ -49,10 +49,12 @@ func newEnv(t *testing.T, o envOpt) *env {
 	}
 	issuer, _ := GenerateEd25519()
 	device, _ := GenerateEd25519()
-	store, err := InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
+	file, err := InitializeReplayFile(filepath.Join(t.TempDir(), "state", "replay.db"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := &closingStore{file: file}
+	t.Cleanup(store.close)
 	cfg := ServerConfig{ReplayStore: store,
 		Key:          key,
 		Issuers:      NewIssuers(issuer.Public().(ed25519.PublicKey)),
@@ -526,4 +528,65 @@ func BenchmarkHandshake(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// closingStore wraps a test node's replay file. Its cleanup is registered
+// after t.TempDir, so it runs before the directory is removed: it waits for
+// store operations still running in node handlers (which outlive the test)
+// and refuses new ones. Otherwise Windows can fail the cleanup with
+// "directory is not empty" while a handler writes a snapshot.
+type closingStore struct {
+	file   *FileReplayStore
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
+}
+
+func (c *closingStore) enter() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.active.Add(1)
+	return true
+}
+
+func (c *closingStore) close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.active.Wait()
+}
+
+func (c *closingStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry time.Time) (bool, error) {
+	if !c.enter() {
+		return false, ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.file.CheckAndMark(ctx, tag, expiry)
+}
+
+func (c *closingStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	if !c.enter() {
+		return false, ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.file.Has(ctx, tag)
+}
+
+func (c *closingStore) Prune(ctx context.Context) error {
+	if !c.enter() {
+		return ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.file.Prune(ctx)
+}
+
+// fileStore returns the file store behind a test node's replay store.
+func fileStore(s ReplayStore) *FileReplayStore {
+	if c, ok := s.(*closingStore); ok {
+		return c.file
+	}
+	return s.(*FileReplayStore)
 }

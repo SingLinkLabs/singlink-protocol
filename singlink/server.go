@@ -88,6 +88,10 @@ type ServerConfig struct {
 	RevokedFile string
 
 	Logger *slog.Logger
+
+	// cryptoHook, tests only, runs while the handshake cryptography slot is
+	// held.
+	cryptoHook func()
 }
 
 // Server is an SingLink node.
@@ -263,6 +267,30 @@ func (s *Server) Serve(ln net.Listener) error {
 	}
 }
 
+// authenticate decrypts the first flight and verifies its token and proof
+// of possession inside one of the bounded handshake cryptography slots. The
+// slot is released by defer, so a panic in this section (recovered by
+// handle) cannot leak it and eventually block every later handshake.
+func (s *Server) authenticate(flight []byte) (*serverHandshake, *Token, error) {
+	s.guard.crypto <- struct{}{}
+	defer func() { <-s.guard.crypto }()
+	if s.cfg.cryptoHook != nil {
+		s.cfg.cryptoHook()
+	}
+	hs, err := parseFirstFlight(flight, s.keys)
+	if err != nil {
+		return nil, nil, err
+	}
+	tok, err := s.cfg.Issuers.Verify(hs.req.token)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hs.verifyPoP(tok.DevicePub) {
+		return nil, nil, errProbe
+	}
+	return hs, tok, nil
+}
+
 // pruneReplay erases expired replay marks while the node is serving, so the
 // opaque security state does not outlive its acceptance window on idle nodes.
 func (s *Server) pruneReplay(p ReplayPruner, stop <-chan struct{}) {
@@ -323,16 +351,7 @@ func (s *Server) handle(raw net.Conn) {
 		fail(errProbe)
 		return
 	}
-	s.guard.crypto <- struct{}{}
-	hs, err := parseFirstFlight(flight, s.keys)
-	var tok *Token
-	if err == nil {
-		tok, err = s.cfg.Issuers.Verify(hs.req.token)
-		if err == nil && !hs.verifyPoP(tok.DevicePub) {
-			err = errProbe
-		}
-	}
-	<-s.guard.crypto
+	hs, tok, err := s.authenticate(flight)
 	if err != nil {
 		fail(err)
 		return
@@ -487,11 +506,14 @@ func (s *Server) handle(raw net.Conn) {
 
 // PolicyFingerprint returns a short, order-independent hash of the node's
 // configured destination policy (private destinations, refused ranges and
-// blocked ports). Every instance that accepts the same keys must have the same
-// policy (SPEC §5.2); logging this value at start-up makes drift visible. It
-// reveals nothing beyond the configuration it summarizes.
+// blocked ports) and of the built-in special-purpose ranges, so instances
+// running releases with different built-in lists differ as well. Every
+// instance that accepts the same keys must have the same policy (SPEC §5.2);
+// logging this value at start-up makes drift visible. It reveals nothing
+// beyond the configuration it summarizes.
 func (s *Server) PolicyFingerprint() string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "builtin=%s\n", builtinPolicy())
 	fmt.Fprintf(&b, "private=%t\n", s.res.allowPrivate)
 	ports := make([]int, 0, len(s.res.blockedPorts))
 	for p, blocked := range s.res.blockedPorts {

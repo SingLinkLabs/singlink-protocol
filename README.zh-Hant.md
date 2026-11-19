@@ -8,7 +8,7 @@
 - **授權：** Apache-2.0。「SingLink」、「SingLinkVPN」、星連／星连名稱與標誌為 SingLinkVPN 商標（見 [NOTICE](NOTICE)）。
 - **署名：** 任何使用或轉發，都必須保留署名：軟件由原作者 SingLinkVPN 提供（見[署名](#署名)）。
 - **版本：** 1.0.0-draft（規格第 4 版草案）。**發布日期：** 2026-11-12，星連VPN開源計畫第二階段。
-- **安全：** 已完成內部安全審計，共 31 個問題，「高」和「中」等級全部修好或緩解（[docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)）；已規劃第三方審計。
+- **安全：** 已完成內部安全審計，共 31 個問題，「高」和「中」等級全部修好或緩解（[docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)）；之後完成兩次第三方原始碼審計（2026-11-13，以及 VPN Labs 的 [VPNL-2026-0013](https://vpn.com.de/reports/VPNL-2026-0013)），修正與立場見 [docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md)（英文）。
 - **沿革：** SingLink Beta 協議從星連VPN 早期版本、SingLink Beta 一路演進到現在的 SingLink 2.0；初代版本延續了星連VPN 的帳號權限、裝置綁定與安全設計理念。
 - **暫不公開：** 最新版本（SingLink 2.0 核心與現行星連VPN 正式 App），基於安全考量。
 - **相關連結：** 初代客戶端 [singlink-vpn-app](https://github.com/SingLinkLabs/singlink-vpn-app) · 開源總庫 [singlink-vpn-open-source](https://github.com/SingLinkLabs/singlink-vpn-open-source) · [官網開源頁面](https://singlinkvpn.com/hk/tech/open-source/)
@@ -44,7 +44,7 @@ SingLink Beta 協議是 SingLinkVPN 開源的初代 SingLink Beta 協議，是�
 - 只用 Go 標準庫的成熟加密元件，沒有第三方套件，也沒有自創加密演算法。
 - 已完成**內部安全審計**，共找到 31 個問題，「高」和「中」等級全部修好或緩解，詳見 [docs/SECURITY-AUDIT.zh-Hant.md](docs/SECURITY-AUDIT.zh-Hant.md)。
 - 每個修正都有對應的回歸測試，所有解析器都做過模糊測試。
-- **已規劃由第三方審計公司進行正式審計**；在審計完成前，用於高風險場景請先審慎評估。
+- 已完成兩次**第三方原始碼審計**（2026-11-13，以及 VPN Labs 報告 [VPNL-2026-0013](https://vpn.com.de/reports/VPNL-2026-0013)），發現、修正與保留的設計取捨記錄在 [docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md)（英文）。審計不等於安全保證，協議也仍是草案；用於高風險場景前請先審慎評估。
 
 ## 目錄
 
@@ -57,7 +57,7 @@ SingLink Beta 協議是 SingLinkVPN 開源的初代 SingLink Beta 協議，是�
 | `cmd/singlink/` | 命令列工具：產生金鑰、簽發憑證、產生連結、跑節點、跑客戶端、一鍵本機示範 |
 | `ffi/` | 給 App 用的 C 介面 `libsinglink` |
 | `deploy/` | 節點設定範例，以及強化過的 systemd 服務檔 |
-| `docs/` | 安全審計報告 |
+| `docs/` | 安全審計報告與第三方審計修正紀錄 |
 
 VPN App（Flutter）放在另一個獨立倉庫。
 

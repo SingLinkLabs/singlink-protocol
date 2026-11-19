@@ -15,7 +15,10 @@
   phase 2 of the SingLinkVPN open-source plan.
 - **Security:** internal security audit with 31 findings, all High and Medium
   fixed or mitigated ([docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md));
-  third-party audit planned.
+  third-party source audits of 2026-11-13 and by VPN Labs
+  ([VPNL-2026-0013](https://vpn.com.de/reports/VPNL-2026-0013)), with fixes
+  and positions in
+  [docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md).
 - **Lineage:** the SingLink protocol has evolved from SingLinkVPN's early
   versions and SingLink Beta to today's SingLink 2.0; this first generation carries forward
   SingLinkVPN's design principles of account-based permissions, device
@@ -72,13 +75,16 @@ adds what a production VPN service needs.
   - automatic rekeying.
 
 The wire format is in **[SPEC.md](SPEC.md)**. The internal security review
-and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
+and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**; the
+third-party audit findings, fixes and positions are in
+**[docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md)**.
 
 > **Status: 1.0.0-draft (spec draft 4).** The protocol uses only standard
 > primitives from the Go standard library. It has been through an internal
-> security review, with a regression test for every finding plus fuzzing.
-> **A third-party audit is planned**; until it is complete, evaluate the
-> protocol carefully before high-risk use.
+> security review and third-party source audits (2026-11-13, and VPN Labs,
+> report VPNL-2026-0013), with a regression test for every fixed code finding
+> plus fuzzing. An audit is not a guarantee and the protocol is still a draft:
+> evaluate it carefully before high-risk use.
 
 ## Layout
 
@@ -91,13 +97,16 @@ and its fixes are in **[docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)**.
 | `cmd/singlink/` | CLI: key generation, tokens, links, node, client, demo |
 | `ffi/` | `libsinglink` C ABI for apps |
 | `deploy/` | Example node config and hardened systemd unit |
-| `docs/` | Security review |
+| `docs/` | Security review and audit remediation |
 
 The reference desktop client (Flutter) lives in a separate repository.
 
 ## Quick start (one machine)
 
-Requires Go ≥ 1.24.
+Requires Go ≥ 1.26.11. With the default `GOTOOLCHAIN=auto`, the go command
+fetches the release toolchain named in `go.mod` (`toolchain` line), which
+`make cli`, `make lib` and `make linux` require; `make vulncheck` runs
+govulncheck.
 
 ```sh
 make test

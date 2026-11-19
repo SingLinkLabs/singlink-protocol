@@ -4,10 +4,13 @@ package singlink
 
 import "net/netip"
 
-// Every supported representation is checked; the original dial target is kept.
+// policyAddresses returns ip and the IPv4 address it embeds, if any: the
+// IPv4-mapped form is unmapped, and the well-known NAT64 prefix (RFC 6052) and
+// the IPv4-translated format (RFC 2765) also yield their embedded IPv4
+// address. Every representation is checked; the original dial target is kept.
 func policyAddresses(ip netip.Addr) []netip.Addr {
 	ip = ip.Unmap()
-	if nat64.Contains(ip) {
+	if nat64.Contains(ip) || ipv4Translated.Contains(ip) {
 		b := ip.As16()
 		return []netip.Addr{ip, netip.AddrFrom4([4]byte(b[12:]))}
 	}
@@ -31,7 +34,9 @@ func (rs *resolver) allowedAddress(ip netip.Addr) bool {
 // configAllowed applies only the node's configured, host-independent address
 // policy (deny_cidrs and the special-purpose ranges). It performs no I/O.
 func (rs *resolver) configAllowed(ip netip.Addr) bool {
-	if !ip.IsValid() {
+	// A zoned address never matches a prefix; none reaches here today (the
+	// wire format has no zone and the resolver strips it), so refuse it.
+	if !ip.IsValid() || ip.Zone() != "" {
 		return false
 	}
 	for _, equivalent := range policyAddresses(ip) {

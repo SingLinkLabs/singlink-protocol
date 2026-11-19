@@ -1,12 +1,21 @@
 # SingLink Beta Protocol Specification
 
-Status: **Draft 4** (2026-11-16; admission order clarified 2026-11-17).
+Status: **Draft 4** (2026-11-16; admission order clarified 2026-11-17;
+destination ranges (§8) and audit status updated 2026-11-19, wire format
+unchanged).
 Draft 4 changes `IDENT` (§2) to `SingLink/1 by SingLinkVPN (singlinkvpn.com)`;
 this changes every derived key, so draft 4 peers do not interoperate with
 draft 3 peers (upgrade matrix: §10). Draft 3 bound the protocol identifier
 `IDENT` into the handshake. Draft 2 added the fixes from an
 internal security review; see [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
-**It has not yet had an independent third-party audit.**
+The specification and its reference implementation have since had
+third-party source audits: one of 2026-11-13 and an independent audit by
+VPN Labs (report VPNL-2026-0013,
+<https://vpn.com.de/reports/VPNL-2026-0013>). Their findings, the fixes and
+the findings kept as accepted design trade-offs are recorded in
+[docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md). An audit covers
+the code at the audited commits and is not a guarantee of security or a
+formal proof; the protocol is still a draft (§11).
 Wire version byte: `0x01`. Reference implementation: `singlink/` (Go,
 standard library only).
 
@@ -407,13 +416,21 @@ file descriptors) MUST NOT stop the node.
 ## 8. Node destination policy
 
 Independently of tokens, nodes SHOULD refuse:
-- every IANA special-purpose IPv4 and IPv6 range: `0/8`, `10/8`,
-  `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`,
-  `192.0.2/24`, `192.88.99/24`, `192.168/16`, `198.18/15`,
-  `198.51.100/24`, `203.0.113/24`, `224/4`, `240/4`, `::/96`,
-  `::ffff:0:0/96`, `64:ff9b:1::/48`, `100::/64`, `2001::/23`,
-  `2001:db8::/32`, `2002::/16`, `fc00::/7`, `fe80::/10`, `fec0::/10`,
-  `ff00::/8`;
+- every range of the IANA IPv4 and IPv6 Special-Purpose Address Registries
+  that is not globally reachable, plus multicast and the deprecated ranges
+  (a range is refused as a whole when only parts of it are globally
+  reachable): `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`,
+  `172.16/12`, `192.0.0/24`, `192.0.2/24`, `192.88.99/24`, `192.168/16`,
+  `198.18/15`, `198.51.100/24`, `203.0.113/24`, `224/4`, `240/4`, `::/96`,
+  `::ffff:0:0/96` (as IPv6; an IPv4-mapped address is checked as the IPv4
+  address it maps), `64:ff9b:1::/48`, `100::/64`, `100:0:0:1::/64`,
+  `2001::/23`, `2001:db8::/32`, `2002::/16`, `3fff::/20`, `5f00::/16`,
+  `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`;
+- every IPv6 address outside `2000::/3`, the only range IANA assigns global
+  unicast addresses from, other than the NAT64 prefix below (this covers
+  ranges that the IETF assigns later from its reserved space);
+- the IPv4-translated format `::ffff:0:0:0/96` (RFC 2765), whatever IPv4
+  address it embeds;
 - the IPv4 address embedded in `64:ff9b::/96` (NAT64), when it is itself
   non-public;
 - the node's own interface addresses;
@@ -471,8 +488,9 @@ drafts cannot talk to each other.
 
 ## 11. Open items
 
-- Independent third-party cryptographic review, and a formal model of the
-  handshake (Tamarin or ProVerif).
+- A formal model of the handshake (Tamarin or ProVerif). The third-party
+  audits named at the top of this document were source audits, not a formal
+  analysis.
 - Post-quantum forward secrecy (ephemeral ML-KEM in the reply).
 - Elligator2-encoded ephemeral keys, for transports without TLS.
 - uTLS-style client fingerprints for the `tls` transport; WebSocket,

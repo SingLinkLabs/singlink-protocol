@@ -10,9 +10,10 @@ concept. We aim to acknowledge reports within 3 working days.
 Supported versions: the latest commit on `main`. The protocol is a draft
 (SingLink Beta, spec draft 4); wire-format changes are still possible.
 
-Past reviews: [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) and the
-remediation of the 2026-11-13 source audit,
-[docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md).
+Past reviews: the internal review [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md),
+and the third-party source audits (2026-11-13, and VPN Labs, report
+[VPNL-2026-0013](https://vpn.com.de/reports/VPNL-2026-0013)) with their
+remediation in [docs/SECURITY-REMEDIATION.md](docs/SECURITY-REMEDIATION.md).
 
 ## Node deployment contract (replay protection)
 

@@ -541,4 +541,14 @@ func TestPolicyFingerprint(t *testing.T) {
 	if len(base) != 12 {
 		t.Fatal("unexpected fingerprint length")
 	}
+	// A release with a different built-in special-purpose list (F-03) has a
+	// different fingerprint for the same configuration.
+	saved := deniedPrefixes
+	t.Cleanup(func() { deniedPrefixes = saved })
+	deniedPrefixes = saved[:len(saved)-1]
+	changed := mk(ServerConfig{DenyCIDRs: []netip.Prefix{p1, p2}, BlockedPorts: []uint16{22, 23}})
+	deniedPrefixes = saved
+	if changed == base {
+		t.Fatal("built-in range change not reflected")
+	}
 }

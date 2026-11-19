@@ -19,7 +19,7 @@ func TestSharedReplayStoreMixedAcceptanceWindows(t *testing.T) {
 		c.FlightIdle = 2 * time.Millisecond
 		c.HandshakeTimeout = 500 * time.Millisecond
 	}})
-	firstStore := e.srv.cfg.ReplayStore.(*FileReplayStore)
+	firstStore := fileStore(e.srv.cfg.ReplayStore)
 	secondStore, err := OpenFileReplayStore(firstStore.path, 0)
 	if err != nil {
 		t.Fatal(err)

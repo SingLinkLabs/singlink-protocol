@@ -123,8 +123,8 @@ func TestDraft3FlightGoesToFallbackUnchanged(t *testing.T) {
 			t.Fatalf("%s: nothing reached the fallback", name)
 		}
 	}
-	if st := e.srv.replay.(*FileReplayStore); st != nil {
-		snap, err := st.load()
+	if cs, ok := e.srv.replay.(*closingStore); ok {
+		snap, err := cs.file.load()
 		if err != nil || len(snap.entries) != 0 {
 			t.Fatal("mismatched flights reached replay state")
 		}

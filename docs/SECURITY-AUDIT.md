@@ -1,15 +1,17 @@
 # Security review: SingLink Beta Protocol, draft 1 → draft 2
 
 Date: 2026-11-12. Scope: this repository (protocol design, `SPEC.md`, the Go
-implementation, CLI, C ABI, deploy files) as of commit `3eb3fd3`.
+implementation, CLI, C ABI, deploy files) as of commit `6cd1884`.
 
 **Nature of this review.** It was an internal review by two independent
 reviewers, working in parallel and in separate copies of the code. One
 covered the cryptographic design, the other the implementation. Every
 finding marked "reproduced" was confirmed with a test or proof of concept.
 
-It is **not** a substitute for an independent third-party audit, which we
-still plan before calling the protocol stable (see SPEC §11).
+It is **not** a substitute for an independent third-party audit. (Since
+then the code has had third-party source audits, on 2026-11-13 and by VPN
+Labs, report VPNL-2026-0013; see
+[SECURITY-REMEDIATION.md](SECURITY-REMEDIATION.md).)
 
 ## Summary
 

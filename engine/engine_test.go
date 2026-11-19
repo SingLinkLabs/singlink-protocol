@@ -4,9 +4,11 @@
 package engine
 
 import (
+	"context"
 	"crypto/ed25519"
 	"net"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,7 +60,56 @@ func testReplayStore(t *testing.T) singlink.ReplayStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	// Registered after t.TempDir, so it runs before the directory is
+	// removed: it waits for store operations still running in node handlers
+	// (which outlive the test) and refuses new ones. Otherwise Windows can
+	// fail the cleanup with "directory is not empty" while a handler writes
+	// a snapshot.
+	cs := &closingStore{store: s}
+	t.Cleanup(cs.close)
+	return cs
+}
+
+// closingStore wraps a test replay store so that it can be shut down before
+// its directory is removed.
+type closingStore struct {
+	store  singlink.ReplayStore
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
+}
+
+func (c *closingStore) enter() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.active.Add(1)
+	return true
+}
+
+func (c *closingStore) close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.active.Wait()
+}
+
+func (c *closingStore) CheckAndMark(ctx context.Context, tag [32]byte, expiry time.Time) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.CheckAndMark(ctx, tag, expiry)
+}
+
+func (c *closingStore) Has(ctx context.Context, tag [32]byte) (bool, error) {
+	if !c.enter() {
+		return false, singlink.ErrReplayStore
+	}
+	defer c.active.Done()
+	return c.store.Has(ctx, tag)
 }
 
 // auditNodeConfig completes a synthetic test node configuration.

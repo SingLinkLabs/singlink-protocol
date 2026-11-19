@@ -3,9 +3,9 @@
 package singlink
 
 // Regression tests ported from the 2026-11-13 third-party source audit of
-// commit 78cde5e (findings P-01, P-02, P-03, P-05; P-04 is in package
+// commit 9b04898 (findings P-01, P-02, P-03, P-05; P-04 is in package
 // engine). The audit's reproductions passed while the defect existed; these
-// versions assert the safe behaviour instead and fail on 78cde5e. Synthetic
+// versions assert the safe behaviour instead and fail on 9b04898. Synthetic
 // keys, loopback sockets and temporary files only.
 
 import (

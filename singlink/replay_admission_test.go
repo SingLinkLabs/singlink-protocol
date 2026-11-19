@@ -51,7 +51,7 @@ func TestFutureFlightRejectedAcrossRestart(t *testing.T) {
 	if !accepts(e.addr) {
 		t.Fatal("fresh control rejected")
 	}
-	snapshot, err := e.srv.cfg.ReplayStore.(*FileReplayStore).load()
+	snapshot, err := fileStore(e.srv.cfg.ReplayStore).load()
 	if err != nil || len(snapshot.entries) != 1 {
 		t.Fatal("admission did not persist mark")
 	}
@@ -66,7 +66,7 @@ func TestFutureFlightRejectedAcrossRestart(t *testing.T) {
 		t.Fatal("same-instance replay admitted")
 	}
 	// A separate store object models a new process over the same durable state.
-	reopened, err := OpenFileReplayStore(e.srv.cfg.ReplayStore.(*FileReplayStore).path, 0)
+	reopened, err := OpenFileReplayStore(fileStore(e.srv.cfg.ReplayStore).path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +106,12 @@ func TestFutureFlightRejectedAcrossRestart(t *testing.T) {
 // replay state: same keys and configuration, separately opened store.
 func auditFreshInstanceConfig(t *testing.T, cfg ServerConfig) ServerConfig {
 	t.Helper()
-	reopened, err := OpenFileReplayStore(cfg.ReplayStore.(*FileReplayStore).path, 0)
+	reopened, err := OpenFileReplayStore(fileStore(cfg.ReplayStore).path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ReplayStore = reopened
+	wrapped := &closingStore{file: reopened}
+	t.Cleanup(wrapped.close)
+	cfg.ReplayStore = wrapped
 	return cfg
 }
